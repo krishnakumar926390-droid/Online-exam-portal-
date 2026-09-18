@@ -259,30 +259,21 @@
         return validDoc ? { id: validDoc.id, ...validDoc.data() } : null;
       },
 
-      async getTeacherExams(teacherId) {
-        try {
-          const snap = await db.collection("exams").get();
-          const currentTeacher = state.activeTeacher;
-          const tEmail = (currentTeacher?.email || "").trim().toLowerCase();
-          const tName = (currentTeacher?.name || "").trim().toLowerCase();
-          const tId = String(teacherId || "").trim();
-
-          const activeExams = [];
-          snap.docs.forEach(doc => {
-            const d = doc.data();
-            if (!d) return;
-            const match = (tId && String(d.teacherId || "").trim() === tId) ||
-                          (tEmail && String(d.teacherEmail || d.email || "").trim().toLowerCase() === tEmail) ||
-                          (tName && String(d.teacherName || "").trim().toLowerCase() === tName);
-            if (match && !d.isDeleted) {
-              activeExams.push({ id: doc.id, ...d });
-            }
-          });
-          return activeExams;
-        } catch (err) {
-          return readCachedList("exams", teacherId);
-        }
-      },
+           async getTeacherExams(teacherId) {
+      try {
+        const snap = await db.collection("exams").get();
+        const activeExams = [];
+        snap.docs.forEach(doc => {
+          const d = doc.data();
+          if (d && !d.isDeleted) {
+            activeExams.push({ id: doc.id, ...d });
+          }
+        });
+        return activeExams;
+      } catch (err) {
+        return readCachedList("exams", teacherId);
+      }
+    },
 
       async getTrashExams(teacherId) {
         const snap = await db.collection("exams").where("isDeleted", "==", true).get();
@@ -332,28 +323,14 @@
         await db.collection("results").doc(resId).set(updateData, { merge: true });
       },
 
-      async getResults(teacherId) {
-        try {
-          const snap = await db.collection("results").get();
-          const currentTeacher = state.activeTeacher;
-          const tEmail = (currentTeacher?.email || "").trim().toLowerCase();
-          const tName = (currentTeacher?.name || "").trim().toLowerCase();
-          const tId = String(teacherId || "").trim();
-
-          const matched = [];
-          snap.docs.forEach(doc => {
-            const r = doc.data();
-            if (!r) return;
-            const match = (tId && String(r.teacherId || "").trim() === tId) ||
-                          (tEmail && String(r.teacherEmail || "").trim().toLowerCase() === tEmail) ||
-                          (tName && String(r.teacherName || "").trim().toLowerCase() === tName);
-            if (match || !r.teacherId) matched.push({ id: doc.id, ...r });
-          });
-          return matched;
-        } catch (err) {
-          return readCachedList("results", teacherId);
-        }
-      },
+       async getResults(teacherId) {
+      try {
+        const snap = await db.collection("results").get();
+        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      } catch (err) {
+        return readCachedList("results", teacherId);
+      }
+    },
 
       async getResultsByCode(examCode) {
         const snap = await db.collection("results").where("examCode", "==", examCode.trim().toUpperCase()).get();

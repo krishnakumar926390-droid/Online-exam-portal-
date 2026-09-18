@@ -1587,10 +1587,18 @@
 
     /* ==================== TEACHER RESULTS & MERIT LIST ==================== */
     async function renderTeacherResults(c) {
-      c.innerHTML = `<div class="p-8 text-center text-xs font-bold text-slate-500">डेटा लोड हो रहा है...</div>`;
-      const results = await API.getResults(state.activeTeacher.id);
-      results.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));
+          const teacherId = state.activeTeacher?.id;
+    // 1. फोन के कैश से रिजल्ट तुरंत निकालें ताकि 0 सेकंड में टेबल खुल जाए
+    let results = readCachedList("results", teacherId) || [];
+    results.sort((a, b) => (b.timestamp || b.createdTimestamp || 0) - (a.timestamp || a.createdTimestamp || 0));
 
+    // 2. बैकग्राउंड में क्लाउड से नया डेटा मँगाएँ (स्क्रीन अटकेगी नहीं)
+    API.getResults(teacherId).then(cloudRes => {
+      if (Array.isArray(cloudRes) && cloudRes.length > 0) {
+        writeCachedList("results", teacherId, cloudRes);
+      }
+    }).catch(e => console.log(e));
+      
       c.innerHTML = `
         <div class="space-y-4">
           <div class="flex justify-between items-center bg-white p-4 rounded-2xl border shadow-sm">

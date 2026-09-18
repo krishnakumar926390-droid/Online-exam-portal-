@@ -251,13 +251,45 @@
                     }
         /* ==================== API (FIRESTORE) ==================== */
     const API = {
-      async getExamByCode(code) {
-        const cleanCode = (code || "").trim().toUpperCase();
+          async getExamByCode(code) {
+      if (!code) return null;
+      const cleanCode = String(code).replace(/\s+/g, '').toUpperCase();
+
+      // 1. क्लाउड से सीधा मिलान
+      try {
         const snap = await db.collection("exams").where("examCode", "==", cleanCode).get();
-        if (snap.empty) return null;
-        const validDoc = snap.docs.find(d => !d.data().isDeleted);
-        return validDoc ? { id: validDoc.id, ...validDoc.data() } : null;
-      },
+        if (!snap.empty) {
+          const validDoc = snap.docs.find(d => !d.data().isDeleted);
+          if (validDoc) return { id: validDoc.id, ...validDoc.data() };
+        }
+      } catch (err) {}
+
+      // 2. बैकअप स्कैन (स्पेस या केस अंतर होने पर)
+      try {
+        const allSnap = await db.collection("exams").get();
+        for (const doc of allSnap.docs) {
+          const d = doc.data();
+          if (!d || d.isDeleted) continue;
+          const exCode = String(d.examCode || "").replace(/\s+/g, '').toUpperCase();
+          if (exCode === cleanCode) {
+            return { id: doc.id, ...d };
+          }
+        }
+      } catch (e) {}
+
+      // 3. लोकल कैश बैकअप
+      try {
+        const teacher = state.activeTeacher;
+        if (teacher && teacher.id) {
+          const localList = readCachedList("exams", teacher.id);
+          const found = localList.find(e => !e.isDeleted && String(e.examCode || "").replace(/\s+/g, '').toUpperCase() === cleanCode);
+          if (found) return found;
+        }
+      } catch (cacheErr) {}
+
+      return null;
+    },
+      
 
            async getTeacherExams(teacherId) {
       try {

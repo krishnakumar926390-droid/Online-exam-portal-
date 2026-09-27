@@ -281,6 +281,28 @@
       };
       reader.readAsDataURL(file);
     }
+
+        // फ़ोटो सेलेक्ट होते ही कंप्रेस करके सेव करने के लिए
+    window.onQuestionImagePick = function(event, index) {
+      const file = event.target.files[0];
+      if (!file) return;
+      compressAndConvertImage(file, function(base64Url) {
+        if (base64Url && state.currentQuestions && state.currentQuestions[index]) {
+          state.currentQuestions[index].imageUrl = base64Url;
+          if (typeof renderQuestionItems === "function") renderQuestionItems();
+          else if (typeof renderQuestionsList === "function") renderQuestionsList();
+        }
+      });
+    };
+
+    // फ़ोटो हटाने के लिए
+    window.removeQuestionImage = function(index) {
+      if (state.currentQuestions && state.currentQuestions[index]) {
+        delete state.currentQuestions[index].imageUrl;
+        if (typeof renderQuestionItems === "function") renderQuestionItems();
+        else if (typeof renderQuestionsList === "function") renderQuestionsList();
+      }
+    };
     
         /* ==================== API (FIRESTORE) ==================== */
     const API = {

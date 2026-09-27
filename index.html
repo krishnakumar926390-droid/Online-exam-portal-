@@ -1656,24 +1656,68 @@
       renderCreateExam(document.getElementById("app"));
     }
 
-    async function saveExam(status) {
+        async function saveExam(status) {
+      // 1. बटन को तुरंत लॉक करें ताकि बार-बार क्लिक करने से डुप्लिकेट न बने
+      const saveBtns = document.querySelectorAll("button[onclick*='saveExam']");
+      saveBtns.forEach(b => {
+        b.disabled = true;
+        b.dataset.oldText = b.innerText;
+        b.innerText = "⏳ सुरक्षित हो रहा है...";
+      });
+
+      const unlockButtons = () => {
+        saveBtns.forEach(b => {
+          b.disabled = false;
+          b.innerText = b.dataset.oldText || "सुरक्षित करें";
+        });
+      };
+
       syncCurrentQuestions();
       const ex = state.builderExam;
-      ex.teacherName = state.activeTeacher.name;
-      ex.teacherEmail = state.activeTeacher.email || "";
-      ex.teacherPhoto = state.activeTeacher.photo || "";
+      if (!ex) { unlockButtons(); return; }
 
-      if (!ex.examName.trim() || !ex.examCode.trim()) return alert("Exam Name और Code भरना अनिवार्य है!");
+      ex.teacherName = state.activeTeacher?.name || "";
+      ex.teacherEmail = state.activeTeacher?.email || "";
+      ex.teacherPhoto = state.activeTeacher?.photo || "";
+      ex.teacherId = state.activeTeacher?.id || "teacher_default";
 
+      const cleanName = (ex.examName || "").trim();
+      const cleanCode = (ex.examCode || "").trim().toUpperCase();
+
+      if (!cleanName || !cleanCode) {
+        alert("कृपया परीक्षा का नाम और कोड अवश्य भरें!");
+        unlockButtons();
+        return;
+      }
+
+      ex.examName = cleanName;
+      ex.examCode = cleanCode;
       ex.status = status;
+      ex.isDeleted = false;
+      ex.updatedAt = Date.now();
+
       try {
+        // 2. डुप्लिकेट रोकने के लिए: अगर नई परीक्षा है, तो जाँचें कि यह कोड पहले से तो नहीं है
+        if (!ex.id) {
+          const existingExams = await API.getTeacherExams(ex.teacherId);
+          const duplicate = existingExams.find(e => !e.isDeleted && String(e.examCode || "").trim().toUpperCase() === cleanCode);
+          if (duplicate) {
+            alert(`⚠️ कोड "${cleanCode}" से परीक्षा पहले से मौजूद है! एक ही कोड की परीक्षा दोबारा नहीं बन सकती।`);
+            unlockButtons();
+            return;
+          }
+        }
+
         const savedId = await API.saveExam(ex);
         ex.id = savedId;
-        upsertCachedItem("exams", state.activeTeacher.id, ex);
+        upsertCachedItem("exams", state.activeTeacher?.id, ex);
         alert("परीक्षा सफलतापूर्वक सुरक्षित हो गई!");
         navigate("teacher-dash");
-      } catch (err) { alert("त्रुटि: " + err.message); }
-    }
+      } catch (err) {
+        alert("त्रुटि: " + err.message);
+        unlockButtons();
+      }
+    } 
 
     /* ==================== TEACHER RESULTS & MERIT LIST ==================== */
     async function renderTeacherResults(c) {

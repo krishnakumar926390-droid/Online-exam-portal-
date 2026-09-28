@@ -1152,74 +1152,59 @@
       alert("प्रोफाइल सुरक्षित हो गई!");
       navigate("teacher-dash");
     }
-        /* ==================== TEACHER DASHBOARD (WITH LIVE SEARCH & CLICKABLE STATS) ==================== */
-    async function renderTeacherDashboard(c) {
-      if (!state.activeTeacher) return navigate("teacher-login");
+     /* ==================== TEACHER DASHBOARD ==================== */
+async function renderTeacherDashboard(c) {
+  if (!state.activeTeacher) return navigate('teacher-login');
 
-      const teacherId = state.activeTeacher.id;
-      let cachedExams = readCachedList("exams", teacherId);
-      let cachedResults = readCachedList("results", teacherId);
+  const teacherId = state.activeTeacher?.id || "teacher_default";
+  let cachedExams = readCachedList("exams", teacherId) || [];
+  let cachedResults = readCachedList("results", teacherId) || [];
 
-      renderFullDashboardUI(c, cachedExams, cachedResults, true);
+  // पहले तुरंत कैश से स्क्रीन दिखाएँ
+  renderFullDashboardUI(c, cachedExams, cachedResults);
 
-      try {
-        const [cloudExams, cloudResults] = await Promise.all([
-          API.getTeacherExams(teacherId),
-          API.getResults(teacherId)
-        ]);
+  try {
+    const [cloudExams, cloudResults] = await Promise.all([
+      API.getTeacherExams(teacherId),
+      API.getResults(teacherId)
+    ]);
 
-        const examMap = new Map();
-        [...cachedExams, ...cloudExams].forEach(e => {
-          if (!e) return;
-          const k = e.id || e.examCode;
-          if (k) examMap.set(k, { ...(examMap.get(k) || {}), ...e });
-        });
+    const examsList = (Array.isArray(cloudExams) && cloudExams.length > 0) ? cloudExams : cachedExams;
+    const resultsList = (Array.isArray(cloudResults) && cloudResults.length > 0) ? cloudResults : cachedResults;
 
-        const resultMap = new Map();
-        [...cachedResults, ...cloudResults].forEach(r => {
-          if (!r) return;
-          const k = r.id || `${r.examCode}_${r.studentName}_${r.submissionDateTime || r.createdTimestamp}`;
-          resultMap.set(k, { ...(resultMap.get(k) || {}), ...r });
-        });
+    writeCachedList("exams", teacherId, examsList);
+    writeCachedList("results", teacherId, resultsList);
 
-        cachedExams = Array.from(examMap.values()).filter(e => !e.isDeleted);
-        cachedResults = Array.from(resultMap.values());
-        writeCachedList("exams", teacherId, cachedExams);
-        writeCachedList("results", teacherId, cachedResults);
+    renderFullDashboardUI(c, examsList, resultsList);
+  } catch (err) {
+    console.error("Dashboard Load Error:", err);
+  }
+}
 
-        renderFullDashboardUI(c, cachedExams, cachedResults, false);
-      } catch (err) {
-        renderFullDashboardUI(c, cachedExams, cachedResults, false);
-      }
-    }
+function renderFullDashboardUI(c, exams, results) {
+  exams = (exams || []).filter(e => e && !e.isDeleted);
+  results = results || [];
 
-    function renderFullDashboardUI(c, exams, results, isSyncing) {
-        function renderFullDashboardUI(c, exams, results) {
-    exams = (exams || []).filter(e => e && !e.isDeleted);
-    results = results || [];
+  let filteredExams = exams.slice();
 
-    let filteredExams = exams.slice();
+  if (state.examSearchQuery && state.examSearchQuery.trim() !== '') {
+    const q = state.examSearchQuery.toLowerCase().trim();
+    filteredExams = filteredExams.filter(e =>
+      (e.examName || "").toLowerCase().includes(q) ||
+      (e.examCode || "").toLowerCase().includes(q) ||
+      (e.subject || "").toLowerCase().includes(q)
+    );
+  }
 
-    // केवल तभी फ़िल्टर करें जब सर्च बॉक्स में वास्तव में कुछ लिखा हो
-    if (state.examSearchQuery && state.examSearchQuery.trim() !== '') {
-      const q = state.examSearchQuery.toLowerCase().trim();
-      filteredExams = filteredExams.filter(e =>
-        (e.examName || "").toLowerCase().includes(q) ||
-        (e.examCode || "").toLowerCase().includes(q) ||
-        (e.subject || "").toLowerCase().includes(q)
-      );
-    }
+  if (state.examClassFilter && state.examClassFilter !== "All" && state.examClassFilter !== "सभी वर्ग") {
+    filteredExams = filteredExams.filter(e => (e.class || e.targetClass) === state.examClassFilter);
+  }
 
-    // केवल तभी क्लास फ़िल्टर करें जब "All" या खाली न हो
-    if (state.examClassFilter && state.examClassFilter !== "All" && state.examClassFilter !== "सभी वर्ग") {
-      filteredExams = filteredExams.filter(e => (e.class || e.targetClass) === state.examClassFilter);
-    } 
-
-      if (state.examSortOrder === "az") {
-        filteredExams.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));
-      } else {
-        filteredExams.sort((a, b) => (a.createdTimestamp || 0) - (b.createdTimestamp || 0));
-      }
+  if (state.examSortOrder === "az") {
+    filteredExams.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } else {
+    filteredExams.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  }
 
       c.innerHTML = `
         <div class="space-y-6">

@@ -1194,22 +1194,26 @@
     }
 
     function renderFullDashboardUI(c, exams, results, isSyncing) {
-      let filteredExams = exams.slice();
+        function renderFullDashboardUI(c, exams, results) {
+    exams = (exams || []).filter(e => e && !e.isDeleted);
+    results = results || [];
 
-      // लाइव सर्च (नाम, कोड या तारीख)
-      if (state.examSearchQuery && state.examSearchQuery.trim()) {
-        const q = state.examSearchQuery.toLowerCase().trim();
-        filteredExams = filteredExams.filter(e => 
-          (e.examName || "").toLowerCase().includes(q) || 
-          (e.examCode || "").toLowerCase().includes(q) ||
-          (e.createdDate || "").toLowerCase().includes(q) ||
-          (e.subject || "").toLowerCase().includes(q)
-        );
-      }
+    let filteredExams = exams.slice();
 
-      if (state.examClassFilter && state.examClassFilter !== "All") {
-        filteredExams = filteredExams.filter(e => (e.class || "").toLowerCase().includes(state.examClassFilter.toLowerCase()));
-      }
+    // केवल तभी फ़िल्टर करें जब सर्च बॉक्स में वास्तव में कुछ लिखा हो
+    if (state.examSearchQuery && state.examSearchQuery.trim() !== '') {
+      const q = state.examSearchQuery.toLowerCase().trim();
+      filteredExams = filteredExams.filter(e =>
+        (e.examName || "").toLowerCase().includes(q) ||
+        (e.examCode || "").toLowerCase().includes(q) ||
+        (e.subject || "").toLowerCase().includes(q)
+      );
+    }
+
+    // केवल तभी क्लास फ़िल्टर करें जब "All" या खाली न हो
+    if (state.examClassFilter && state.examClassFilter !== "All" && state.examClassFilter !== "सभी वर्ग") {
+      filteredExams = filteredExams.filter(e => (e.class || e.targetClass) === state.examClassFilter);
+    } 
 
       if (state.examSortOrder === "az") {
         filteredExams.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));

@@ -1153,13 +1153,25 @@
       navigate("teacher-dash");
     }
      /* ==================== TEACHER DASHBOARD ==================== */
-async function renderTeacherDashboard(c) {
-  if (!state.activeTeacher) return navigate('teacher-login');
+ async function renderTeacherDashboard(c) {
+  // अगर स्टेट खाली है, तो फोन की मेमोरी (localStorage) से शिक्षक डेटा लोड करें
+  if (!state.activeTeacher) {
+    try {
+      const savedTeacher = localStorage.getItem("sep_teacher");
+      if (savedTeacher) state.activeTeacher = JSON.parse(savedTeacher);
+    } catch(e) {}
+  }
+
+  // अगर फिर भी लॉगिन नहीं है, तब लॉगिन पेज खोलें
+  if (!state.activeTeacher) {
+    navigate('teacher-login');
+    return;
+  }
 
   const teacherId = state.activeTeacher?.id || "teacher_default";
   let cachedExams = readCachedList("exams", teacherId) || [];
   let cachedResults = readCachedList("results", teacherId) || [];
-
+   
   // पहले तुरंत कैश से स्क्रीन दिखाएँ
   renderFullDashboardUI(c, cachedExams, cachedResults);
 

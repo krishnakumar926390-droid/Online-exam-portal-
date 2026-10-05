@@ -1,0 +1,1878 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Exam Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+  <!-- MathJax Configuration -->
+  <script>
+    window.MathJax = {
+      loader: { load: ['[tex]/mhchem'] },
+      tex: {
+        packages: { '[+]': ['mhchem'] },
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']]
+      },
+      svg: { fontCache: 'global' }
+    };
+  </script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+</head>
+<body class="bg-slate-100 min-h-screen font-sans text-slate-800 flex flex-col selection:bg-amber-500 selection:text-white">
+  <style>
+    .math-view mjx-container { font-size: 1.05em !important; }
+    .confetti-layer { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 9999; }
+    .confetti-piece { position: absolute; top: -20px; width: 10px; height: 16px; opacity: 0; animation: confettiFall 2.4s cubic-bezier(0.25, 1, 0.5, 1) forwards; }
+    @keyframes confettiFall {
+      0% { transform: translate3d(0,-20px,0) rotate(0deg); opacity: 1; }
+      100% { transform: translate3d(var(--dx), 90vh, 0) rotate(720deg); opacity: 0; }
+    }
+  </style>
+
+  <!-- हेडर बार -->
+  <header class="bg-gradient-to-r from-indigo-800 via-indigo-700 to-purple-800 text-white shadow-md sticky top-0 z-40">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center gap-3">
+      <div class="flex items-center gap-2.5 cursor-pointer" onclick="handleLogoClick()">
+        <span class="text-2xl">📚</span>
+        <div>
+          <h1 class="text-lg font-black tracking-tight leading-tight">Smart Exam Portal</h1>
+          <p class="text-[10px] text-indigo-200">Online Examination & Evaluation</p>
+        </div>
+      </div>
+      <div id="navAuthArea" class="flex items-center gap-2"></div>
+    </div>
+  </header>
+
+  <!-- शिक्षक ब्रॉडकास्ट नोटिस बैनर -->
+  <div id="noticeBanner" class="max-w-6xl mx-auto w-full px-4 pt-3 hidden"></div>
+
+  <!-- मुख्य एप्लिकेशन स्क्रीन -->
+  <main id="app" class="flex-grow max-w-6xl w-full mx-auto p-3 md:p-6"></main>
+
+  <!-- यूनिवर्सल मॉडल कंटेनर -->
+  <div id="modalContainer" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm hidden items-center justify-center p-4 z-50"></div>
+
+  <div id="confettiContainer" class="confetti-layer"></div>
+  <script>
+    /* ==================== 1. FIREBASE CONNECTION ==================== */
+    const firebaseConfig = {
+      apiKey: "AIzaSyCNZQE09U86piWrHItnrl6gOj5lp5odCIc",
+      authDomain: "online-smartexam.firebaseapp.com",
+      projectId: "online-smartexam",
+      storageBucket: "online-smartexam.firebasestorage.app",
+      messagingSenderId: "496019627434",
+      appId: "1:496019627434:web:86920fd700a85f1e529fd3",
+      measurementId: "G-DG0KG9N2TL"
+    };
+
+    let db = null;
+    try {
+      if (typeof firebase !== "undefined") {
+        if (!firebase.apps.length) {
+          firebase.initializeApp(firebaseConfig);
+        }
+        db = firebase.firestore();
+      }
+    } catch (e) {
+      console.warn("डेटाबेस ऑफलाइन मोड:", e);
+    }
+
+    /* ==================== 2. GLOBAL STATE ==================== */
+    let state = {
+      view: "student-home",
+      activeStudent: JSON.parse(localStorage.getItem("sep_student") || "null"),
+      activeTeacher: JSON.parse(localStorage.getItem("sep_teacher") || "null"),
+      selectedClass: localStorage.getItem("sep_selected_class") || "Class 10",
+      selectedStream: localStorage.getItem("sep_selected_stream") || "Science",
+      activeStudentExam: null,
+      examRunState: {
+        answers: {},
+        secondsElapsed: 0,
+        timerInterval: null
+      },
+      builderExam: null,
+      examSortOrder: "az",
+      examSearchQuery: "",
+      examSubjectFilter: "All",
+      meritFilterCode: "",
+      lastResultPayload: null,
+      notice: JSON.parse(localStorage.getItem("sep_broadcast_notice") || "null")
+    };
+
+    let examSaveInProgress = false;
+
+    /* ==================== 3. UTILITIES & MATH ==================== */
+    function openModal(title, msg, onConfirm, confirmBtnColor = "bg-rose-600 hover:bg-rose-700") {
+      const mc = document.getElementById("modalContainer");
+      mc.innerHTML = `
+        <div class="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+          <h3 class="text-base font-bold text-slate-800">${title}</h3>
+          <p class="text-xs text-slate-600 leading-relaxed">${msg}</p>
+          <div class="flex justify-end gap-2 pt-2">
+            <button onclick="closeModal()" class="px-4 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 rounded-xl">रद्द करें</button>
+            <button id="modalConfirmBtn" class="px-4 py-2 text-xs font-bold text-white rounded-xl ${confirmBtnColor}">हाँ, जारी रखें</button>
+          </div>
+        </div>
+      `;
+      document.getElementById("modalConfirmBtn").onclick = () => { closeModal(); if (onConfirm) onConfirm(); };
+      mc.classList.remove("hidden");
+      mc.classList.add("flex");
+    }
+
+    function closeModal() {
+      const mc = document.getElementById("modalContainer");
+      mc.classList.add("hidden");
+      mc.classList.remove("flex");
+    }
+
+    function navigate(viewName) {
+      state.view = viewName;
+      renderApp();
+    }
+
+    function handleLogoClick() {
+      if (state.activeTeacher) navigate("teacher-dash");
+      else if (state.activeStudent) navigate("student-dashboard");
+      else navigate("student-home");
+    }
+
+    function renderMath(root) {
+      root = root || document.getElementById("app") || document.body;
+      if (window.MathJax && window.MathJax.typesetPromise) {
+        window.MathJax.typesetPromise([root]).catch(() => {});
+      }
+    }
+
+    function launchConfetti() {
+      const container = document.getElementById("confettiContainer");
+      if (!container) return;
+      container.innerHTML = "";
+      const colors = ["#f59e0b", "#ef4444", "#10b981", "#3b82f6", "#ec4899", "#8b5cf6"];
+      for (let i = 0; i < 80; i++) {
+        const piece = document.createElement("div");
+        piece.className = "confetti-piece";
+        piece.style.left = Math.random() * 100 + "vw";
+        piece.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+        piece.style.setProperty("--dx", (Math.random() * 300 - 150) + "px");
+        piece.style.animationDelay = (Math.random() * 0.6) + "s";
+        container.appendChild(piece);
+      }
+      setTimeout(() => { container.innerHTML = ""; }, 3000);
+    }
+
+    async function downloadElementAsImage(elementId, fileName) {
+      const el = document.getElementById(elementId);
+      if (!el) return alert("डेटा नहीं मिला!");
+      try {
+        const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+        const link = document.createElement("a");
+        link.download = fileName + ".png";
+        link.href = canvas.toDataURL("image/png");
+        link.click();
+      } catch (err) { alert("डाउनलोड समस्या: " + err.message); }
+    }
+
+    function printOrDownloadPDF(printableId, titleText) {
+      const el = document.getElementById(printableId);
+      if (!el) return alert("डेटा नहीं मिला!");
+      const printWin = window.open('', '', 'width=900,height=700');
+      printWin.document.write('<!DOCTYPE html><html><head><title>' + titleText + '</title><script src="https://cdn.tailwindcss.com"></' + 'script></head><body class="p-6">');
+      printWin.document.write('<div class="text-center pb-4 border-b mb-4"><h1 class="text-xl font-bold text-slate-800">' + titleText + '</h1></div>');
+      printWin.document.write(el.innerHTML);
+      printWin.document.write('</body></html>');
+      printWin.document.close();
+      printWin.focus();
+      setTimeout(() => printWin.print(), 800);
+    }
+    /* ==================== 4. DATA ENGINE (STUDENT & EXAMS API) ==================== */
+    const API = {
+      async getStudents() {
+        if (db) {
+          try {
+            const snap = await db.collection("students").get();
+            if (!snap.empty) return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          } catch (e) {}
+        }
+        return JSON.parse(localStorage.getItem("sep_students_db") || "[]");
+      },
+
+      async saveStudent(student) {
+        if (db) {
+          try {
+            const res = await db.collection("students").add(student);
+            return res.id;
+          } catch (e) {}
+        }
+        const list = JSON.parse(localStorage.getItem("sep_students_db") || "[]");
+        student.id = "STU_" + Date.now();
+        list.push(student);
+        localStorage.setItem("sep_students_db", JSON.stringify(list));
+        return student.id;
+      },
+
+      async getExams() {
+        const now = Date.now();
+        const fifteenDaysMs = 15 * 24 * 60 * 60 * 1000;
+        let cloudExams = [];
+        if (db) {
+          try {
+            const snap = await db.collection("exams").get();
+            cloudExams = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          } catch (e) {}
+        }
+
+        const local1 = JSON.parse(localStorage.getItem("sep_exams_db") || "[]");
+        const local2 = JSON.parse(localStorage.getItem("sep_all_exams") || "[]");
+        const teacher = state.activeTeacher;
+        const local3 = teacher ? JSON.parse(localStorage.getItem(`sep_cached_exams_${teacher.id}`) || "[]") : [];
+
+        const examMap = new Map();
+        [...local1, ...local2, ...local3, ...cloudExams].forEach(e => {
+          if (!e) return;
+          const k = e.id || e.examCode;
+          if (k) examMap.set(k, { ...(examMap.get(k) || {}), ...e });
+        });
+
+        const validExams = [];
+        examMap.forEach(ex => {
+          if (ex.isDeleted && ex.deletedTimestamp && (now - ex.deletedTimestamp > fifteenDaysMs)) {
+            // 15 दिनों से पुराने डिलीटेड डेटा को स्वतः हटाएँ
+          } else {
+            validExams.push(ex);
+          }
+        });
+
+        localStorage.setItem("sep_exams_db", JSON.stringify(validExams));
+        localStorage.setItem("sep_all_exams", JSON.stringify(validExams));
+        return validExams;
+      },
+
+      async saveExam(examData) {
+        examData.examCode = String(examData.examCode || "").trim().toUpperCase();
+        examData.updatedTimestamp = Date.now();
+        const todayStr = new Date().toLocaleDateString("hi-IN");
+
+        if (db) {
+          try {
+            if (examData.id) {
+              const id = examData.id;
+              delete examData.id;
+              await db.collection("exams").doc(id).set(examData, { merge: true });
+              return id;
+            } else {
+              examData.createdDate = todayStr;
+              examData.createdTimestamp = Date.now();
+              examData.isDeleted = false;
+              const res = await db.collection("exams").add(examData);
+              return res.id;
+            }
+          } catch (e) {}
+        }
+
+        const list = await this.getExams();
+        if (examData.id) {
+          const idx = list.findIndex(e => e.id === examData.id);
+          if (idx >= 0) list[idx] = { ...list[idx], ...examData };
+          localStorage.setItem("sep_exams_db", JSON.stringify(list));
+          return examData.id;
+        } else {
+          const newId = "EXAM_" + Date.now();
+          examData.id = newId;
+          examData.createdDate = todayStr;
+          examData.createdTimestamp = Date.now();
+          examData.isDeleted = false;
+          list.push(examData);
+          localStorage.setItem("sep_exams_db", JSON.stringify(list));
+          return newId;
+        }
+      },
+
+      async setExamTrashState(examId, isDeleted) {
+        if (db) {
+          try {
+            await db.collection("exams").doc(examId).set({
+              isDeleted: isDeleted,
+              deletedTimestamp: isDeleted ? Date.now() : null
+            }, { merge: true });
+          } catch (e) {}
+        }
+        const list = await this.getExams();
+        const item = list.find(e => e.id === examId);
+        if (item) {
+          item.isDeleted = isDeleted;
+          item.deletedTimestamp = isDeleted ? Date.now() : null;
+          localStorage.setItem("sep_exams_db", JSON.stringify(list));
+        }
+      },
+
+      async permanentDeleteExam(examId) {
+        if (db) {
+          try { await db.collection("exams").doc(examId).delete(); } catch (e) {}
+        }
+        let list = await this.getExams();
+        list = list.filter(e => e.id !== examId);
+        localStorage.setItem("sep_exams_db", JSON.stringify(list));
+      },
+      async getResults() {
+        let cloudResults = [];
+        if (db) {
+          try {
+            const snap = await db.collection("results").get();
+            if (!snap.empty) cloudResults = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          } catch (e) {}
+        }
+        const local1 = JSON.parse(localStorage.getItem("sep_results_db") || "[]");
+        const local2 = JSON.parse(localStorage.getItem("sep_results") || "[]");
+
+        const resultMap = new Map();
+        [...local1, ...local2, ...cloudResults].forEach(r => {
+          if (!r) return;
+          const k = r.id || `${r.examCode}_${r.studentUsername || r.studentName}_${r.createdTimestamp}`;
+          resultMap.set(k, { ...(resultMap.get(k) || {}), ...r });
+        });
+        const list = Array.from(resultMap.values());
+        localStorage.setItem("sep_results_db", JSON.stringify(list));
+        return list;
+      },
+
+      async submitResult(resultData) {
+        resultData.createdTimestamp = Date.now();
+        resultData.date = new Date().toLocaleDateString("hi-IN");
+        resultData.time = new Date().toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit', hour12: true });
+
+        if (db) {
+          try {
+            const res = await db.collection("results").add(resultData);
+            return res.id;
+          } catch (e) {}
+        }
+        const list = await this.getResults();
+        resultData.id = "RES_" + Date.now();
+        list.push(resultData);
+        localStorage.setItem("sep_results_db", JSON.stringify(list));
+        return resultData.id;
+      },
+
+      async deleteResult(id) {
+        if (db) {
+          try { await db.collection("results").doc(id).delete(); } catch (e) {}
+        }
+        let list = await this.getResults();
+        list = list.filter(r => r.id !== id);
+        localStorage.setItem("sep_results_db", JSON.stringify(list));
+      },
+
+      async getMessages() {
+        if (db) {
+          try {
+            const snap = await db.collection("studentFeedback").get();
+            return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          } catch (e) {}
+        }
+        return JSON.parse(localStorage.getItem("sep_chat_db") || "[]");
+      },
+
+      async sendMessage(msg) {
+        msg.createdTimestamp = Date.now();
+        msg.date = new Date().toLocaleDateString("hi-IN") + " " + new Date().toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' });
+        if (db) {
+          try { await db.collection("studentFeedback").add(msg); return; } catch (e) {}
+        }
+        const list = JSON.parse(localStorage.getItem("sep_chat_db") || "[]");
+        list.push(msg);
+        localStorage.setItem("sep_chat_db", JSON.stringify(list));
+      },
+
+      async replyMessage(id, replyText) {
+        if (db) {
+          try {
+            await db.collection("studentFeedback").doc(id).set({
+              reply: replyText,
+              repliedDate: new Date().toLocaleDateString("hi-IN")
+            }, { merge: true });
+            return;
+          } catch (e) {}
+        }
+        const list = JSON.parse(localStorage.getItem("sep_chat_db") || "[]");
+        const target = list.find(m => m.id === id);
+        if (target) { target.reply = replyText; target.repliedDate = new Date().toLocaleDateString("hi-IN"); }
+        localStorage.setItem("sep_chat_db", JSON.stringify(list));
+      }
+    };
+    /* ==================== 5. NOTICE & STUDENT AUTH ==================== */
+    function checkNoticeBanner() {
+      const banner = document.getElementById("noticeBanner");
+      if (!banner) return;
+      const notice = state.notice;
+      if (notice && notice.expiresAt && Date.now() < notice.expiresAt) {
+        banner.innerHTML = `
+          <div class="bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-rose-500/10 border border-amber-300 p-3.5 rounded-2xl flex items-center justify-between text-xs text-amber-900 shadow-sm">
+            <div class="flex items-center gap-2">
+              <span class="text-base">📢</span>
+              <span><strong>शिक्षक सूचना (${notice.targetClass || 'सभी वर्ग'}):</strong> ${notice.text}</span>
+            </div>
+            <span class="text-[10px] text-amber-700 font-mono font-bold">${Math.ceil((notice.expiresAt - Date.now()) / 60000)} मि. शेष</span>
+          </div>
+        `;
+        banner.classList.remove("hidden");
+      } else {
+        banner.classList.add("hidden");
+      }
+    }
+
+    function renderStudentLogin(c) {
+      c.innerHTML = `
+        <div class="max-w-md mx-auto bg-white rounded-3xl p-6 md:p-8 shadow-sm border space-y-6">
+          <div class="text-center space-y-1">
+            <span class="inline-block p-3 bg-amber-100 text-amber-700 rounded-2xl text-2xl shadow-inner">🎮</span>
+            <h2 class="text-xl font-black text-slate-800 tracking-tight">विद्यार्थी पोर्टल</h2>
+            <p class="text-xs text-slate-500">परीक्षा देने व परिणाम देखने हेतु लॉगिन करें</p>
+          </div>
+
+          <div class="flex bg-slate-100 p-1 rounded-2xl text-xs font-bold">
+            <button onclick="toggleAuthTab('login')" id="tabBtnLogin" class="flex-1 py-2 rounded-xl bg-white shadow-sm text-indigo-700">लॉगिन</button>
+            <button onclick="toggleAuthTab('register')" id="tabBtnReg" class="flex-1 py-2 rounded-xl text-slate-600">नया खाता बनाएँ</button>
+          </div>
+
+          <div id="loginFormBox" class="space-y-3 text-xs">
+            <div>
+              <label class="font-bold text-slate-700">यूज़रनेम (Username) *</label>
+              <input type="text" id="stuUserIn" placeholder="उदा. RAHUL12" class="w-full p-3 border rounded-xl mt-1 outline-none uppercase font-mono font-bold focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label class="font-bold text-slate-700">पासवर्ड (Password) *</label>
+              <input type="password" id="stuPassIn" placeholder="••••••••" class="w-full p-3 border rounded-xl mt-1 outline-none font-bold focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <button onclick="handleStudentLogin()" class="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black py-3.5 rounded-xl shadow-lg transition text-xs">
+              🔥 प्रवेश करें (Enter Portal) →
+            </button>
+            <div class="text-center pt-2">
+              <button onclick="openForgotCredentialsModal()" class="text-xs text-indigo-600 font-bold hover:underline">
+                🔑 यूज़रनेम या पासवर्ड भूल गए?
+              </button>
+            </div>
+          </div>
+
+          <div id="registerFormBox" class="space-y-3 text-xs hidden">
+            <div>
+              <label class="font-bold text-slate-700">पूरा नाम (Full Name) *</label>
+              <input type="text" id="regFullName" placeholder="अपना वास्तविक नाम लिखें" class="w-full p-3 border rounded-xl mt-1 outline-none font-bold" />
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="font-bold text-slate-700">वर्ग (Class) *</label>
+                <select id="regClass" class="w-full p-3 border rounded-xl mt-1 bg-white font-bold text-indigo-700">
+                  <option value="Class 10">Class 10</option>
+                  <option value="Class 12">Class 12</option>
+                  <option value="Class 11">Class 11</option>
+                  <option value="Class 9">Class 9</option>
+                  <option value="Class 8">Class 8</option>
+                </select>
+              </div>
+              <div>
+                <label class="font-bold text-slate-700">रोल नं. (Optional)</label>
+                <input type="text" id="regRoll" placeholder="उदा. 05" class="w-full p-3 border rounded-xl mt-1 outline-none font-bold" />
+              </div>
+            </div>
+            <div>
+              <label class="font-bold text-slate-700">यूज़रनेम चुनें (Unique Username) *</label>
+              <input type="text" id="regUser" placeholder="उदा. KRISHNA99" class="w-full p-3 border rounded-xl mt-1 uppercase font-mono font-bold text-indigo-700 outline-none" />
+            </div>
+            <div>
+              <label class="font-bold text-slate-700">गुप्त पासवर्ड बनाएँ *</label>
+              <input type="password" id="regPass" placeholder="मजबूत पासवर्ड बनाएँ" class="w-full p-3 border rounded-xl mt-1 outline-none font-bold" />
+            </div>
+            <button onclick="handleStudentRegistration()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3.5 rounded-xl shadow-lg transition text-xs">
+              ✨ खाता सुरक्षित करें (Create Account)
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    function toggleAuthTab(type) {
+      const lBox = document.getElementById("loginFormBox");
+      const rBox = document.getElementById("registerFormBox");
+      const lBtn = document.getElementById("tabBtnLogin");
+      const rBtn = document.getElementById("tabBtnReg");
+      if (type === "login") {
+        lBox.classList.remove("hidden");
+        rBox.classList.add("hidden");
+        lBtn.className = "flex-1 py-2 rounded-xl bg-white shadow-sm text-indigo-700";
+        rBtn.className = "flex-1 py-2 rounded-xl text-slate-600";
+      } else {
+        lBox.classList.add("hidden");
+        rBox.classList.remove("hidden");
+        rBtn.className = "flex-1 py-2 rounded-xl bg-white shadow-sm text-indigo-700";
+        lBtn.className = "flex-1 py-2 rounded-xl text-slate-600";
+      }
+    }
+
+    async function handleStudentRegistration() {
+      const name = document.getElementById("regFullName").value.trim();
+      const sClass = document.getElementById("regClass").value;
+      const roll = document.getElementById("regRoll").value.trim() || "N/A";
+      const user = document.getElementById("regUser").value.trim().toUpperCase();
+      const pass = document.getElementById("regPass").value.trim();
+
+      if (!name || !user || !pass) return alert("कृपया सभी विवरण भरें!");
+
+      const all = await API.getStudents();
+      if (all.some(s => s.username === user)) {
+        return alert("❌ यह यूज़रनेम पहले से पंजीकृत है! कृपया दूसरा यूज़रनेम चुनें।");
+      }
+
+      const newStudent = { id: "STU_" + Date.now(), name, class: sClass, roll, username: user, password: pass };
+      await API.saveStudent(newStudent);
+      state.activeStudent = newStudent;
+      state.selectedClass = sClass;
+      localStorage.setItem("sep_student", JSON.stringify(newStudent));
+      localStorage.setItem("sep_selected_class", sClass);
+      alert("🎉 बधाई! आपका खाता सफलतापूर्वक बन गया है।");
+      navigate("student-dashboard");
+    }
+
+    async function handleStudentLogin() {
+      const user = document.getElementById("stuUserIn").value.trim().toUpperCase();
+      const pass = document.getElementById("stuPassIn").value.trim();
+      if (!user || !pass) return alert("कृपया यूज़रनेम और पासवर्ड भरें!");
+
+      const all = await API.getStudents();
+      const student = all.find(s => s.username === user);
+
+      if (!student) return alert("❌ यह यूज़रनेम पंजीकृत नहीं है! 'नया खाता बनाएँ' पर जाएँ।");
+      if (student.password !== pass) return alert("❌ गलत पासवर्ड! कृपया सही पासवर्ड डालें या 'भूल गए' पर क्लिक करें।");
+
+      state.activeStudent = student;
+      state.selectedClass = student.class;
+      localStorage.setItem("sep_student", JSON.stringify(student));
+      localStorage.setItem("sep_selected_class", student.class);
+      navigate("student-dashboard");
+    }
+    function openForgotCredentialsModal() {
+      const mc = document.getElementById("modalContainer");
+      mc.innerHTML = `
+        <div class="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 text-xs">
+          <div class="flex justify-between items-center border-b pb-2">
+            <h3 class="font-black text-sm text-slate-800">🔍 यूज़रनेम / पासवर्ड खोजें</h3>
+            <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 text-sm">✕</button>
+          </div>
+          <div class="space-y-3">
+            <div class="p-3 bg-slate-50 border rounded-2xl space-y-2">
+              <label class="font-bold text-slate-700">1. यदि यूज़रनेम याद है:</label>
+              <div class="flex gap-2">
+                <input type="text" id="recUserIn" placeholder="यूज़रनेम" class="flex-1 p-2 border rounded-xl uppercase font-mono" />
+                <button onclick="recoverByUsernameAction()" class="bg-indigo-600 text-white font-bold px-3 py-2 rounded-xl">पासवर्ड देखें</button>
+              </div>
+            </div>
+            <div class="p-3 bg-slate-50 border rounded-2xl space-y-2">
+              <label class="font-bold text-slate-700">2. यदि पासवर्ड याद है:</label>
+              <div class="flex gap-2">
+                <input type="text" id="recPassIn" placeholder="पासवर्ड" class="flex-1 p-2 border rounded-xl font-mono" />
+                <button onclick="recoverByPasswordAction()" class="bg-emerald-600 text-white font-bold px-3 py-2 rounded-xl">यूज़रनेम देखें</button>
+              </div>
+            </div>
+            <div class="p-3 bg-amber-50 border border-amber-200 rounded-2xl space-y-2">
+              <label class="font-bold text-amber-900">3. दोनों भूल गए? (नाम व वर्ग से ढूँढें):</label>
+              <input type="text" id="recNameIn" placeholder="पंजीकृत पूरा नाम" class="w-full p-2 border rounded-xl" />
+              <div class="flex gap-2 pt-1">
+                <select id="recClassIn" class="flex-1 p-2 border rounded-xl bg-white font-bold text-indigo-700">
+                  <option value="Class 10">Class 10</option>
+                  <option value="Class 12">Class 12</option>
+                  <option value="Class 11">Class 11</option>
+                  <option value="Class 9">Class 9</option>
+                  <option value="Class 8">Class 8</option>
+                </select>
+                <button onclick="recoverByNameAndClassAction()" class="bg-amber-600 text-white font-bold px-3 py-2 rounded-xl">खोजें</button>
+              </div>
+            </div>
+            <div id="recoveryResultBox" class="hidden p-3 bg-indigo-50 border border-indigo-200 rounded-2xl text-center"></div>
+          </div>
+        </div>
+      `;
+      mc.classList.remove("hidden");
+      mc.classList.add("flex");
+    }
+
+    async function recoverByUsernameAction() {
+      const u = document.getElementById("recUserIn").value.trim().toUpperCase();
+      const all = await API.getStudents();
+      const s = all.find(x => x.username === u);
+      const res = document.getElementById("recoveryResultBox");
+      res.classList.remove("hidden");
+      if (s) res.innerHTML = `विद्यार्थी: <b>${s.name}</b><br><span class="text-emerald-700 font-bold text-sm">पासवर्ड: ${s.password}</span>`;
+      else res.innerHTML = `<span class="text-rose-600 font-bold">❌ कोई विद्यार्थी नहीं मिला!</span>`;
+    }
+
+    async function recoverByPasswordAction() {
+      const p = document.getElementById("recPassIn").value.trim();
+      const all = await API.getStudents();
+      const list = all.filter(x => x.password === p);
+      const res = document.getElementById("recoveryResultBox");
+      res.classList.remove("hidden");
+      if (list.length > 0) res.innerHTML = list.map(s => `<div>${s.name} (${s.class}) -> यूज़रनेम: <b class="text-indigo-700">${s.username}</b></div>`).join("");
+      else res.innerHTML = `<span class="text-rose-600 font-bold">❌ यह पासवर्ड किसी का नहीं है!</span>`;
+    }
+
+    async function recoverByNameAndClassAction() {
+      const n = document.getElementById("recNameIn").value.trim().toLowerCase();
+      const c = document.getElementById("recClassIn").value;
+      const all = await API.getStudents();
+      const list = all.filter(x => x.name.trim().toLowerCase() === n && x.class === c);
+      const res = document.getElementById("recoveryResultBox");
+      res.classList.remove("hidden");
+      if (list.length > 0) res.innerHTML = list.map(s => `<div class="p-1">यूज़रनेम: <b class="text-indigo-700 font-mono">${s.username}</b> | पासवर्ड: <b class="text-emerald-700 font-mono">${s.password}</b></div>`).join("");
+      else res.innerHTML = `<span class="text-rose-600 font-bold">❌ कोई रिकॉर्ड नहीं मिला!</span>`;
+    }
+
+    /* ==================== 6. STUDENT DASHBOARD ==================== */
+    async function renderStudentDashboard(c) {
+      if (!state.activeStudent) return navigate("student-login");
+
+      checkNoticeBanner();
+      const stu = state.activeStudent;
+      const curClass = state.selectedClass;
+      const curStream = state.selectedStream;
+
+      const allExams = await API.getExams();
+      const activeExams = allExams.filter(e => !e.isDeleted);
+
+      let displayExams = activeExams.filter(e => {
+        if (curClass === "Class 12") {
+          if (e.class !== "Class 12") return false;
+          const isMerge = Boolean(e.mergeClass12);
+          const subj = (e.subject || "").toLowerCase();
+          const isCommonLang = subj.includes("hindi") || subj.includes("english") || subj.includes("हिंदी") || subj.includes("अंग्रेजी");
+          if (isMerge || isCommonLang) return true;
+          return (e.stream || "Science") === curStream;
+        }
+        return e.class === curClass;
+      });
+
+      if (state.examSubjectFilter !== "All") {
+        displayExams = displayExams.filter(e => (e.subject || "").toLowerCase() === state.examSubjectFilter.toLowerCase());
+      }
+
+      if (state.examSearchQuery.trim()) {
+        const q = state.examSearchQuery.trim().toLowerCase();
+        displayExams = displayExams.filter(e =>
+          (e.examName || "").toLowerCase().includes(q) ||
+          (e.examCode || "").toLowerCase().includes(q) ||
+          (e.subject || "").toLowerCase().includes(q) ||
+          (e.chapter || "").toLowerCase().includes(q)
+        );
+      }
+
+      if (state.examSortOrder === "az") {
+        displayExams.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));
+      } else {
+        displayExams.sort((a, b) => (a.createdTimestamp || 0) - (b.createdTimestamp || 0));
+      }
+
+      const availableSubjects = Array.from(new Set(activeExams.map(e => e.subject).filter(Boolean)));
+
+      c.innerHTML = `
+        <div class="space-y-5">
+          <div class="bg-white rounded-3xl p-5 border shadow-sm flex flex-wrap justify-between items-center gap-4">
+            <div class="flex items-center gap-3">
+              <div class="w-12 h-12 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-black text-xl shadow-md">
+                ${stu.name.charAt(0)}
+              </div>
+              <div>
+                <h2 class="text-lg font-black text-slate-800">${stu.name}</h2>
+                <div class="text-xs text-slate-500 font-mono">यूज़रनेम: <b class="text-indigo-600">${stu.username}</b> | वर्ग: <b>${stu.class}</b></div>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              <button onclick="navigate('student-records')" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold px-3 py-2 rounded-xl border border-indigo-200 shadow-sm">
+                📊 मेरी परीक्षा कुंडली
+              </button>
+              <button onclick="navigate('student-chat')" class="bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold px-3 py-2 rounded-xl border border-rose-200">
+                💬 सवाल पूछें
+              </button>
+              <button onclick="handleStudentLogout()" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-2 rounded-xl">
+                लॉगआउट
+              </button>
+            </div>
+          </div>
+
+          <div class="bg-gradient-to-r from-indigo-900 via-indigo-800 to-purple-900 text-white p-5 rounded-3xl shadow-lg space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <span class="text-[10px] uppercase tracking-wider text-indigo-200 font-bold">वर्ग चुनें (Select Your Class)</span>
+                <h3 class="text-xl font-black mt-0.5">🎯 लक्ष्य परीक्षा कक्ष (Exam Arena)</h3>
+              </div>
+
+              <select onchange="updateSelectedClass(this.value)" class="bg-white text-indigo-950 font-black text-sm px-4 py-2.5 rounded-2xl shadow outline-none cursor-pointer">
+                <option value="Class 10" ${curClass === 'Class 10' ? 'selected' : ''}>कक्षा 10 (Class 10)</option>
+                <option value="Class 12" ${curClass === 'Class 12' ? 'selected' : ''}>कक्षा 12 (Class 12)</option>
+                <option value="Class 11" ${curClass === 'Class 11' ? 'selected' : ''}>कक्षा 11 (Class 11)</option>
+                <option value="Class 9" ${curClass === 'Class 9' ? 'selected' : ''}>कक्षा 9 (Class 9)</option>
+                <option value="Class 8" ${curClass === 'Class 8' ? 'selected' : ''}>कक्षा 8 (Class 8)</option>
+              </select>
+            </div>
+
+            ${curClass === "Class 12" ? `
+              <div class="flex items-center gap-2 pt-2 border-t border-indigo-700/60">
+                <span class="text-xs text-indigo-200 font-bold">संकाय (Stream):</span>
+                <div class="flex bg-indigo-950/60 p-1 rounded-xl">
+                  <button onclick="updateSelectedStream('Science')" class="px-4 py-1.5 rounded-lg text-xs font-bold transition ${curStream === 'Science' ? 'bg-amber-500 text-white shadow' : 'text-indigo-200'}">🔬 Science</button>
+                  <button onclick="updateSelectedStream('Art')" class="px-4 py-1.5 rounded-lg text-xs font-bold transition ${curStream === 'Art' ? 'bg-amber-500 text-white shadow' : 'text-indigo-200'}">🎨 Art</button>
+                </div>
+                <span class="text-[11px] text-amber-300 font-bold ml-auto">✨ हिंदी और इंग्लिश दोनों में दिखेगी</span>
+              </div>
+            ` : ''}
+          </div>
+
+          <div class="bg-white p-4 rounded-2xl border shadow-sm space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h4 class="font-black text-slate-800 text-sm">उपलब्ध परीक्षाएँ (${displayExams.length})</h4>
+              
+              <div class="flex flex-wrap items-center gap-2 text-xs">
+                <select onchange="state.examSubjectFilter = this.value; renderStudentDashboard(document.getElementById('app'));" class="p-2 border rounded-xl bg-slate-50 font-bold text-indigo-700 outline-none">
+                  <option value="All">सभी विषय (All Subjects)</option>
+                  ${availableSubjects.map(sub => `<option value="${sub}" ${state.examSubjectFilter === sub ? 'selected' : ''}>${sub}</option>`).join("")}
+                </select>
+
+                <button onclick="state.examSortOrder = 'az'; renderStudentDashboard(document.getElementById('app'));" class="px-3 py-1.5 rounded-xl font-bold border transition ${state.examSortOrder === 'az' ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-700'}">
+                  A-Z (नई पहले)
+                </button>
+                <button onclick="state.examSortOrder = 'za'; renderStudentDashboard(document.getElementById('app'));" class="px-3 py-1.5 rounded-xl font-bold border transition ${state.examSortOrder === 'za' ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-700'}">
+                  Z-A (पुरानी पहले)
+                </button>
+              </div>
+            </div>
+
+            <div class="relative">
+              <input type="text" value="${state.examSearchQuery}" oninput="state.examSearchQuery = this.value; renderStudentDashboard(document.getElementById('app'));" placeholder="🔍 परीक्षा नाम, कोड (उदा. SC10), विषय या अध्याय लिखें..." class="w-full pl-3 pr-8 py-2.5 border rounded-xl text-xs bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+              ${state.examSearchQuery ? `<button onclick="state.examSearchQuery = ''; renderStudentDashboard(document.getElementById('app'));" class="absolute right-3 top-2.5 text-xs text-slate-400">✕</button>` : ''}
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-4">
+            ${displayExams.length === 0 ? `
+              <div class="col-span-2 bg-white rounded-3xl p-10 text-center border text-slate-400 space-y-2">
+                <span class="text-3xl block">📭</span>
+                <p class="text-xs font-bold">इस वर्ग/विषय में अभी कोई परीक्षा उपलब्ध नहीं है।</p>
+              </div>
+            ` : displayExams.map(e => `
+              <div class="bg-white rounded-2xl p-5 border shadow-sm space-y-3 hover:border-indigo-400 transition">
+                <div class="flex justify-between items-start">
+                  <div>
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-mono">${e.subject || 'सामान्य'} • ${e.class}</span>
+                    <h4 class="font-black text-slate-800 text-base mt-1">${e.examName}</h4>
+                    <p class="text-xs text-slate-500">${e.instituteName ? '🏫 ' + e.instituteName : ''} ${e.chapter ? '• Ch: ' + e.chapter : ''}</p>
+                  </div>
+                  <span class="text-xs font-mono font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded-xl">
+                    ${e.examCode}
+                  </span>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-2.5 rounded-xl border text-slate-600">
+                  <div>कुल प्रश्न: <b class="text-slate-800">${e.questions ? e.questions.length : 0}</b></div>
+                  <div>समय: <b class="text-slate-800">${e.timingType === 'limited' ? e.durationMinutes + ' मिनट' : 'असीमित (स्टॉपवॉच)'}</b></div>
+                </div>
+
+                <button onclick="startStudentLiveExam('${e.id}')" class="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black py-2.5 rounded-xl shadow text-xs transition">
+                  🚀 परीक्षा शुरू करें (Start Test) →
+                </button>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function updateSelectedClass(val) {
+      state.selectedClass = val;
+      localStorage.setItem("sep_selected_class", val);
+      renderStudentDashboard(document.getElementById('app'));
+    }
+
+    function updateSelectedStream(val) {
+      state.selectedStream = val;
+      localStorage.setItem("sep_selected_stream", val);
+      renderStudentDashboard(document.getElementById('app'));
+    }
+    /* ==================== 7. LIVE EXAM RUNNER ENGINE ==================== */
+    async function renderStudentRecords(c) {
+      const student = state.activeStudent;
+      const allResults = await API.getResults();
+      const myResults = allResults.filter(r => r.studentUsername === student.username || r.studentName === student.name);
+      myResults.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));
+
+      c.innerHTML = `
+        <div class="max-w-2xl mx-auto space-y-5">
+          <div class="bg-white border p-5 rounded-3xl flex justify-between items-center shadow-sm">
+            <div>
+              <h2 class="text-base font-black text-indigo-700">📜 मेरा पूरा परीक्षा इतिहास (${myResults.length})</h2>
+              <p class="text-xs text-slate-500">${student.name} • @${student.username}</p>
+            </div>
+            <button onclick="navigate('student-dashboard')" class="text-xs bg-slate-100 px-3 py-1.5 rounded-xl font-bold">← वापस</button>
+          </div>
+
+          <div class="space-y-3">
+            ${myResults.length === 0 ? '<p class="text-center text-xs text-slate-400 py-8 bg-white rounded-3xl border">आपने अभी तक कोई परीक्षा नहीं दी है।</p>' : myResults.map(r => `
+              <div class="bg-white border p-4 rounded-2xl space-y-2 shadow-sm">
+                <div class="flex justify-between items-start">
+                  <div>
+                    <h3 class="text-sm font-bold text-slate-800">${r.examName}</h3>
+                    <span class="text-[11px] text-slate-500 font-mono">Code: ${r.examCode} • विषय: ${r.subject || 'General'}</span>
+                  </div>
+                  <span class="text-xs font-black px-2.5 py-1 rounded-xl ${r.percentage >= 60 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}">${r.percentage}%</span>
+                </div>
+                <div class="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-xl border text-xs text-slate-600">
+                  <div>अंक: <strong class="text-indigo-600">${r.scoredMarks}/${r.totalMarks}</strong></div>
+                  <div>समय: <strong>${r.timeSpentText || 'N/A'}</strong></div>
+                  <div class="text-right text-[10px] text-slate-400 font-mono">${r.date}</div>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    async function startStudentLiveExam(examId) {
+      const exams = await API.getExams();
+      const ex = exams.find(e => e.id === examId);
+      if (!ex) return alert("परीक्षा नहीं मिली!");
+
+      state.activeStudentExam = ex;
+      state.examRunState = {
+        answers: {},
+        secondsElapsed: 0,
+        timerInterval: null
+      };
+
+      if (state.examRunState.timerInterval) clearInterval(state.examRunState.timerInterval);
+      state.examRunState.timerInterval = setInterval(() => {
+        state.examRunState.secondsElapsed++;
+        const el = document.getElementById("liveExamTimer");
+        if (el) {
+          const m = Math.floor(state.examRunState.secondsElapsed / 60);
+          const s = state.examRunState.secondsElapsed % 60;
+          el.innerText = `⏱️ ${m}:${s < 10 ? '0' : ''}${s}`;
+        }
+
+        if (ex.timingType === "limited" && ex.durationMinutes > 0) {
+          const maxSec = ex.durationMinutes * 60;
+          if (state.examRunState.secondsElapsed >= maxSec) {
+            clearInterval(state.examRunState.timerInterval);
+            alert("⏰ निर्धारित समय समाप्त हो गया! उत्तर स्वतः सबमिट हो रहे हैं।");
+            submitStudentExamAction(true);
+          }
+        }
+      }, 1000);
+
+      navigate("live-exam");
+    }
+
+    function renderLiveExam(c) {
+      const ex = state.activeStudentExam;
+      if (!ex) return navigate("student-dashboard");
+
+      const totalQ = ex.questions ? ex.questions.length : 0;
+      const attemptedCount = Object.keys(state.examRunState.answers).length;
+      const remainingCount = totalQ - attemptedCount;
+
+      c.innerHTML = `
+        <div class="space-y-5 math-view pb-16">
+          <div class="bg-white/95 border p-4 rounded-3xl shadow-md sticky top-16 z-30 space-y-3 backdrop-blur-md">
+            ${ex.instituteName ? `<div class="text-center text-sm md:text-base font-black uppercase tracking-widest text-indigo-700 border-b pb-2">🏛️ ${ex.instituteName}</div>` : ''}
+
+            <div class="flex flex-wrap justify-between items-center gap-3">
+              <div>
+                <h2 class="text-base font-black text-slate-800">${ex.examName}</h2>
+                <div class="text-xs text-slate-500">${state.activeStudent.name} • <span class="text-indigo-600 font-mono font-bold">${ex.examCode}</span></div>
+              </div>
+
+              <div class="flex items-center gap-2 text-xs">
+                <div class="bg-slate-100 border px-3 py-1.5 rounded-xl font-bold text-slate-700">कुल: ${totalQ}</div>
+                <div class="bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl font-bold text-indigo-700">हल किए: ${attemptedCount}</div>
+                <div class="bg-rose-50 border border-rose-200 px-3 py-1.5 rounded-xl font-bold text-rose-700">शेष: ${remainingCount}</div>
+                <span id="liveExamTimer" class="bg-indigo-600 text-white px-3 py-1.5 rounded-xl font-mono font-black">⏱️ 0:00</span>
+                <button onclick="confirmLiveExamSubmit()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-4 py-1.5 rounded-xl shadow">सबमिट करें</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            ${ex.questions.map((q, i) => `
+              <div class="bg-white border p-5 rounded-3xl space-y-3 shadow-sm">
+                <div class="flex items-start gap-3">
+                  <span class="bg-indigo-100 text-indigo-700 font-black text-xs px-2.5 py-1 rounded-xl shrink-0">Q${i+1}</span>
+                  <div class="text-sm font-bold text-slate-800 flex-1 leading-relaxed">${q.questionText}</div>
+                </div>
+
+                ${q.imageUrl ? `
+                  <div class="flex justify-center py-2">
+                    <img src="${q.imageUrl}" alt="Question Diagram" class="max-h-72 max-w-full rounded-2xl border p-2 object-contain bg-white" />
+                  </div>
+                ` : ''}
+
+                <div class="grid md:grid-cols-2 gap-2 text-xs pt-1">
+                  ${q.options.map((opt, oi) => {
+                    const isChecked = state.examRunState.answers[i] === oi;
+                    return `
+                      <label class="flex items-center gap-3 p-3.5 rounded-2xl border cursor-pointer transition ${isChecked ? 'bg-indigo-50 border-indigo-600 text-indigo-900 font-bold' : 'hover:bg-slate-50 text-slate-700'}">
+                        <input type="radio" name="live_q_${i}" value="${oi}" ${isChecked ? 'checked' : ''} onchange="state.examRunState.answers[${i}] = ${oi}; renderLiveExam(document.getElementById('app'));" class="accent-indigo-600" />
+                        <span class="font-mono font-bold text-indigo-600">${['A','B','C','D'][oi]}.</span>
+                        <span class="flex-1">${opt}</span>
+                      </label>
+                    `;
+                  }).join("")}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+      setTimeout(renderMath, 80);
+    }
+
+    function confirmLiveExamSubmit() {
+      const totalQ = state.activeStudentExam.questions.length;
+      const attempted = Object.keys(state.examRunState.answers).length;
+      openModal("परीक्षा सबमिट करें?", `आप कुल ${totalQ} में से ${attempted} प्रश्न हल कर चुके हैं। क्या आप अभी सबमिट करना चाहते हैं?`, () => submitStudentExamAction(false), "bg-emerald-600 hover:bg-emerald-700");
+    }
+    async function submitStudentExamAction(auto = false) {
+      if (state.examRunState.timerInterval) clearInterval(state.examRunState.timerInterval);
+      const ex = state.activeStudentExam;
+      const student = state.activeStudent;
+      const answers = state.examRunState.answers;
+      const secElapsed = state.examRunState.secondsElapsed;
+
+      let correctCount = 0;
+      ex.questions.forEach((q, i) => {
+        if (answers[i] === q.correctAnswer) correctCount++;
+      });
+
+      const marksPerQ = ex.marksPerQuestion || 1;
+      const totalMarks = ex.questions.length * marksPerQ;
+      const scoredMarks = correctCount * marksPerQ;
+      const percentage = Math.round((scoredMarks / totalMarks) * 100);
+
+      const m = Math.floor(secElapsed / 60);
+      const s = secElapsed % 60;
+      const timeSpentStr = `${m} मिनट ${s} सेकंड`;
+
+      const resultPayload = {
+        studentId: student.id || student.username,
+        studentName: student.name,
+        studentUsername: student.username,
+        studentClass: student.class,
+        examId: ex.id,
+        examName: ex.examName,
+        examCode: ex.examCode,
+        instituteName: ex.instituteName || "",
+        subject: ex.subject || "General",
+        chapter: ex.chapter || "",
+        scoredMarks,
+        totalMarks,
+        percentage,
+        timeSpentSeconds: secElapsed,
+        timeSpentText: timeSpentStr,
+        answers: answers
+      };
+
+      await API.submitResult(resultPayload);
+      state.lastResultPayload = resultPayload;
+      launchConfetti();
+      navigate("student-result");
+    }
+
+    async function renderStudentResult(c) {
+      const res = state.lastResultPayload;
+      const ex = state.activeStudentExam;
+      if (!res || !ex) return navigate("student-dashboard");
+
+      const allResults = await API.getResults();
+      const examResults = allResults.filter(r => r.examCode === res.examCode);
+      examResults.sort((a, b) => b.scoredMarks - a.scoredMarks || (a.timeSpentSeconds || 0) - (b.timeSpentSeconds || 0));
+
+      const rankIndex = examResults.findIndex(r => r.studentUsername === res.studentUsername && r.createdTimestamp === res.createdTimestamp);
+      const rank = rankIndex >= 0 ? rankIndex + 1 : 1;
+      const totalCandidates = examResults.length;
+
+      c.innerHTML = `
+        <div class="max-w-xl mx-auto space-y-6 pb-16">
+          <div id="printableResultCard" class="bg-white border p-6 md:p-8 rounded-3xl shadow-sm text-center space-y-4">
+            ${res.instituteName ? `<div class="text-xs uppercase font-black tracking-widest text-indigo-700 border-b pb-2">🏛️ ${res.instituteName}</div>` : ''}
+
+            <div class="space-y-1">
+              <span class="text-4xl block">🎉</span>
+              <h2 class="text-2xl font-black text-slate-800">परीक्षा परिणाम</h2>
+              <div class="text-xs text-slate-500 font-mono font-bold">${res.examName} (${res.examCode})</div>
+            </div>
+
+            <div class="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl text-left flex justify-between items-center">
+              <div>
+                <h3 class="text-base font-black text-indigo-900">${res.studentName}</h3>
+                <span class="text-xs text-slate-500">${res.studentClass} • @${res.studentUsername}</span>
+              </div>
+              <div class="text-right">
+                <span class="text-[10px] text-slate-500 uppercase font-bold block">आपकी रैंक</span>
+                <span class="text-xl font-black text-emerald-600">#${rank} / ${totalCandidates}</span>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 py-2">
+              <div class="bg-slate-50 p-4 rounded-2xl border">
+                <span class="text-xs text-slate-500 font-bold block">कुल अंक</span>
+                <div class="text-3xl font-black text-indigo-600 mt-1">${res.scoredMarks} / ${res.totalMarks}</div>
+                <span class="text-xs font-bold text-emerald-600">${res.percentage}% अंक</span>
+              </div>
+              <div class="bg-slate-50 p-4 rounded-2xl border flex flex-col justify-center">
+                <span class="text-xs text-slate-500 font-bold block">लिया गया समय</span>
+                <div class="text-sm font-black text-slate-800 mt-1">${res.timeSpentText}</div>
+                <span class="text-[10px] text-slate-400 font-mono mt-0.5">${res.date}</span>
+              </div>
+            </div>
+
+            <div class="flex gap-2 pt-2 border-t text-xs font-bold">
+              <button onclick="downloadElementAsImage('printableResultCard', 'Result_${res.studentName}_${res.examCode}')" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl shadow">
+                🖼️ रिजल्ट फोटो सेव करें
+              </button>
+              <button onclick="printOrDownloadPDF('printableResultCard', 'Result_${res.studentName}')" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl shadow">
+                📄 PDF
+              </button>
+            </div>
+          </div>
+
+          <div id="printableAnswerKey" class="bg-white border p-6 rounded-3xl space-y-4 shadow-sm">
+            <div class="flex justify-between items-center border-b pb-3">
+              <h3 class="text-base font-black text-slate-800 flex items-center gap-2">📘 विस्तृत उत्तर विश्लेषण</h3>
+              <button onclick="printOrDownloadPDF('printableAnswerKey', 'AnswerKey_${res.examCode}')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-xl border">
+                📑 आंसर-की PDF
+              </button>
+            </div>
+
+            <div class="space-y-4 math-view">
+              ${ex.questions.map((q, i) => {
+                const userChoice = res.answers ? res.answers[i] : undefined;
+                const isCorrect = userChoice === q.correctAnswer;
+                return `
+                  <div class="bg-slate-50 p-4 rounded-2xl border ${isCorrect ? 'border-emerald-300' : 'border-rose-300'} space-y-2 text-xs">
+                    <div class="font-bold text-slate-800 flex items-start gap-2">
+                      <span class="text-indigo-600 font-mono">Q${i+1}.</span>
+                      <div class="flex-1">${q.questionText}</div>
+                    </div>
+
+                    ${q.imageUrl ? `
+                      <div class="flex justify-center py-1">
+                        <img src="${q.imageUrl}" class="max-h-48 max-w-full rounded-xl border p-1 bg-white object-contain" />
+                      </div>
+                    ` : ''}
+
+                    <div class="space-y-1 pt-1">
+                      <div>आपका उत्तर: <strong class="${isCorrect ? 'text-emerald-700' : 'text-rose-600'}">${userChoice === undefined ? 'हल नहीं किया' : ['A','B','C','D'][userChoice] + '. ' + q.options[userChoice]}</strong></div>
+                      <div>सही उत्तर: <strong class="text-emerald-700">${['A','B','C','D'][q.correctAnswer]}. ${q.options[q.correctAnswer]}</strong></div>
+                    </div>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </div>
+
+          <div class="text-center pt-2">
+            <button onclick="navigate('student-dashboard')" class="bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold px-6 py-3 rounded-2xl">
+              ← डैशबोर्ड पर वापस जाएँ
+            </button>
+          </div>
+        </div>
+      `;
+      setTimeout(renderMath, 80);
+    }
+    /* ==================== 8. TEACHER DASHBOARD, BUILDER & MERIT ==================== */
+    function renderTeacherLogin(c) {
+      c.innerHTML = `
+        <div class="max-w-sm mx-auto bg-white rounded-3xl p-6 md:p-8 shadow-sm border space-y-5">
+          <div class="text-center space-y-1">
+            <h2 class="text-lg font-black text-slate-800">👨‍🏫 शिक्षक लॉगिन</h2>
+            <p class="text-xs text-slate-500">परीक्षा व परिणाम प्रबंधन पोर्टल</p>
+          </div>
+          <div class="space-y-3 text-xs">
+            <div>
+              <label class="font-bold">ईमेल आईडी</label>
+              <input type="email" id="tEmail" placeholder="teacher@gmail.com" class="w-full p-2.5 border rounded-xl mt-1 outline-none" />
+            </div>
+            <div>
+              <label class="font-bold">पासवर्ड</label>
+              <input type="password" id="tPass" placeholder="••••••••" class="w-full p-2.5 border rounded-xl mt-1 outline-none" />
+            </div>
+          </div>
+          <button onclick="handleTeacherLogin()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow text-xs">लॉगिन करें</button>
+        </div>
+      `;
+    }
+
+    function handleTeacherLogin() {
+      const email = document.getElementById("tEmail").value.trim().toLowerCase();
+      const pass = document.getElementById("tPass").value.trim();
+      if (!email || !pass) return alert("कृपया ईमेल और पासवर्ड भरें!");
+
+      const teacher = { id: "TCHR_" + btoa(email).substring(0, 10), name: email.split("@")[0], email };
+      state.activeTeacher = teacher;
+      localStorage.setItem("sep_teacher", JSON.stringify(teacher));
+      navigate("teacher-dash");
+    }
+
+    function handleTeacherLogout() {
+      state.activeTeacher = null;
+      localStorage.removeItem("sep_teacher");
+      navigate("student-home");
+    }
+
+    async function renderTeacherDashboard(c) {
+      if (!state.activeTeacher) return navigate("teacher-login");
+
+      const allExams = await API.getExams();
+      const activeExams = allExams.filter(e => !e.isDeleted);
+      const allResults = await API.getResults();
+      const allStudents = await API.getStudents();
+
+      let filtered = activeExams.slice();
+      if (state.examSearchQuery.trim()) {
+        const q = state.examSearchQuery.toLowerCase().trim();
+        filtered = filtered.filter(e =>
+          (e.examName || "").toLowerCase().includes(q) ||
+          (e.examCode || "").toLowerCase().includes(q) ||
+          (e.subject || "").toLowerCase().includes(q)
+        );
+      }
+      if (state.examSortOrder === "az") {
+        filtered.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));
+      } else {
+        filtered.sort((a, b) => (a.createdTimestamp || 0) - (b.createdTimestamp || 0));
+      }
+
+      c.innerHTML = `
+        <div class="space-y-6">
+          <div class="bg-white rounded-3xl p-5 border shadow-sm flex flex-wrap justify-between items-center gap-4">
+            <div>
+              <h2 class="text-xl font-black text-slate-800">नमस्ते, ${state.activeTeacher.name}</h2>
+              <p class="text-xs text-slate-500">${state.activeTeacher.email}</p>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2 text-xs">
+              <button onclick="startCreateNewExam()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-xl shadow">+ Create Exam</button>
+              <button onclick="navigate('merit-list')" class="bg-amber-600 hover:bg-amber-700 text-white font-bold px-3 py-2 rounded-xl shadow">🏆 Merit List</button>
+              <button onclick="navigate('teacher-students')" class="bg-slate-800 hover:bg-slate-900 text-white font-bold px-3 py-2 rounded-xl shadow">👥 विद्यार्थी क्रेडेंशियल</button>
+              <button onclick="navigate('teacher-broadcast')" class="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold px-3 py-2 rounded-xl">📢 नोटिस भेजें</button>
+              <button onclick="navigate('teacher-trash')" class="bg-slate-100 hover:bg-slate-200 text-rose-600 font-bold px-3 py-2 rounded-xl">🗑️ रीसायकल बिन</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div class="bg-white border p-4 rounded-2xl shadow-sm">
+              <span class="text-slate-500 font-bold">मेरी कुल परीक्षाएँ</span>
+              <strong class="text-2xl font-black text-indigo-600 block mt-1">${activeExams.length}</strong>
+            </div>
+            <div class="bg-white border p-4 rounded-2xl shadow-sm">
+              <span class="text-slate-500 font-bold">कुल पंजीकृत विद्यार्थी</span>
+              <strong class="text-2xl font-black text-slate-800 block mt-1">${allStudents.length}</strong>
+            </div>
+            <div class="bg-white border p-4 rounded-2xl shadow-sm">
+              <span class="text-slate-500 font-bold">कुल दिए गए टेस्ट</span>
+              <strong class="text-2xl font-black text-emerald-600 block mt-1">${allResults.length}</strong>
+            </div>
+            <div onclick="navigate('teacher-chat')" class="bg-white border p-4 rounded-2xl shadow-sm cursor-pointer hover:border-rose-300">
+              <span class="text-rose-600 font-bold">छात्र सवाल इनबॉक्स 👆</span>
+              <strong class="text-2xl font-black text-rose-600 block mt-1">Inbox</strong>
+            </div>
+          </div>
+
+          <div class="bg-white border p-5 rounded-3xl space-y-4 shadow-sm">
+            <div class="flex flex-wrap justify-between items-center gap-3">
+              <h3 class="text-base font-black text-slate-800">मेरी परीक्षाएँ (Active Exams - ${filtered.length})</h3>
+              <div class="flex items-center gap-2 text-xs">
+                <input type="text" value="${state.examSearchQuery}" oninput="state.examSearchQuery = this.value; renderTeacherDashboard(document.getElementById('app'));" placeholder="🔍 खोजें..." class="p-2 border rounded-xl outline-none" />
+                <button onclick="state.examSortOrder = 'az'; renderTeacherDashboard(document.getElementById('app'));" class="px-2.5 py-1.5 rounded-lg border ${state.examSortOrder === 'az' ? 'bg-indigo-600 text-white font-bold' : 'bg-slate-50'}">A-Z</button>
+                <button onclick="state.examSortOrder = 'za'; renderTeacherDashboard(document.getElementById('app'));" class="px-2.5 py-1.5 rounded-lg border ${state.examSortOrder === 'za' ? 'bg-indigo-600 text-white font-bold' : 'bg-slate-50'}">Z-A</button>
+              </div>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              ${filtered.length === 0 ? '<p class="text-xs text-slate-400 py-6 text-center col-span-2">कोई परीक्षा नहीं मिली।</p>' : filtered.map(e => `
+                <div class="bg-slate-50 border p-4 rounded-2xl space-y-2.5 hover:shadow-sm transition">
+                  <div class="flex justify-between items-start">
+                    <div>
+                      <h4 class="text-sm font-bold text-slate-800">${e.examName}</h4>
+                      <div class="text-[11px] text-slate-500">${e.class} • विषय: <strong class="text-indigo-600">${e.subject || 'General'}</strong></div>
+                    </div>
+                    <span class="text-xs font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-lg border">${e.examCode}</span>
+                  </div>
+
+                  <div class="text-xs text-slate-500 flex justify-between font-mono">
+                    <span>प्रश्न: ${e.questions?.length || 0}</span>
+                    <span>तारीख: ${e.createdDate || 'सक्रिय'}</span>
+                  </div>
+
+                  <div class="flex flex-wrap items-center gap-1.5 pt-2 border-t text-xs">
+                    <button onclick="editExistingExam('${e.id}')" class="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-1 rounded-xl font-bold">
+                      ✏️ Edit Everything
+                    </button>
+                    <button onclick="navigator.clipboard.writeText('${window.location.origin}${window.location.pathname}?exam=${e.examCode}'); alert('लिंक कॉपी हो गया!');" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded-xl">Copy Link</button>
+                    <button onclick="state.meritFilterCode = '${e.examCode}'; navigate('merit-list');" class="bg-amber-50 text-amber-800 px-2.5 py-1 rounded-xl font-bold">🏆 मेरिट</button>
+                    <button onclick="confirmExamSoftDelete('${e.id}', '${e.examName}')" class="bg-rose-50 hover:bg-rose-100 text-rose-700 px-2.5 py-1 rounded-xl ml-auto">🗑️ Delete</button>
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function confirmExamSoftDelete(id, name) {
+      openModal("रीसायकल बिन में भेजें?", `क्या आप "${name}" को हटाना चाहते हैं? यह रीसायकल बिन में 15 दिनों तक सुरक्षित रहेगी।`, async () => {
+        await API.setExamTrashState(id, true);
+        alert("परीक्षा रीसायकल बिन में भेज दी गई!");
+        renderTeacherDashboard(document.getElementById("app"));
+      });
+    }
+    function startCreateNewExam() {
+      state.builderExam = {
+        instituteName: "",
+        examName: "",
+        examCode: "EXAM" + Math.floor(100 + Math.random() * 900),
+        class: "Class 10",
+        stream: "Science",
+        mergeClass12: false,
+        subject: "Science",
+        chapter: "",
+        timingType: "unlimited",
+        durationMinutes: 30,
+        marksPerQuestion: 1,
+        questions: [{ questionText: "", options: ["", "", "", ""], correctAnswer: 0, imageUrl: "" }]
+      };
+      navigate("create-exam");
+    }
+
+    async function editExistingExam(examId) {
+      const exams = await API.getExams();
+      const ex = exams.find(e => e.id === examId);
+      if (!ex) return alert("परीक्षा नहीं मिली!");
+      state.builderExam = JSON.parse(JSON.stringify(ex));
+      navigate("create-exam");
+    }
+
+    function syncBuilderFields() {
+      const ex = state.builderExam;
+      if (!ex) return;
+      const getVal = id => { const el = document.getElementById(id); return el ? el.value : ""; };
+
+      ex.instituteName = getVal("bInstitute");
+      ex.examName = getVal("bName");
+      ex.examCode = getVal("bCode").trim().toUpperCase();
+      ex.class = getVal("bClass");
+      ex.subject = getVal("bSubject");
+      ex.chapter = getVal("bChapter");
+      ex.timingType = getVal("bTiming");
+      ex.durationMinutes = Number(getVal("bDuration")) || 30;
+      ex.marksPerQuestion = Number(getVal("bMarks")) || 1;
+      const mergeEl = document.getElementById("bMerge");
+      if (mergeEl) ex.mergeClass12 = mergeEl.checked;
+
+      ex.questions.forEach((q, i) => {
+        const qEl = document.getElementById(`b_qText_${i}`); if (qEl) q.questionText = qEl.value;
+        [0, 1, 2, 3].forEach(oi => {
+          const optEl = document.getElementById(`b_opt_${i}_${oi}`); if (optEl) q.options[oi] = optEl.value;
+        });
+        const ansEl = document.getElementById(`b_ans_${i}`); if (ansEl) q.correctAnswer = Number(ansEl.value);
+      });
+    }
+
+    function renderCreateExam(c) {
+      const ex = state.builderExam;
+      const isEditing = Boolean(ex.id);
+
+      c.innerHTML = `
+        <div class="space-y-6 pb-16">
+          <div class="bg-white/95 border p-4 rounded-3xl shadow-md sticky top-16 z-30 flex justify-between items-center backdrop-blur-md">
+            <div>
+              <h2 class="text-base font-black text-indigo-700">${isEditing ? '✏️ परीक्षा सुधारें (Edit Everything)' : '🚀 नई परीक्षा बनाएँ'}</h2>
+              <span class="text-xs text-slate-500">कुल प्रश्न: <strong class="text-slate-800">${ex.questions.length}</strong></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="navigate('teacher-dash')" class="bg-slate-100 text-slate-700 text-xs font-bold px-3 py-2 rounded-xl">← Dashboard</button>
+              <button onclick="saveExamAction()" id="topSaveExamBtn" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow transition">
+                💾 सुरक्षित करें (Publish)
+              </button>
+            </div>
+          </div>
+
+          <div class="bg-white border p-5 rounded-3xl space-y-4 text-xs shadow-sm">
+            <div>
+              <label class="font-bold text-slate-700">संस्थान का नाम (Coaching / School Name - हेडिंग में दिखेगा)</label>
+              <input type="text" id="bInstitute" value="${ex.instituteName || ''}" placeholder="उदा. माँ सरस्वती कोचिंग सेंटर" class="w-full p-2.5 border rounded-xl mt-1 font-bold outline-none" />
+            </div>
+
+            <div class="grid md:grid-cols-3 gap-3">
+              <div>
+                <label class="font-bold text-slate-700">परीक्षा का नाम *</label>
+                <input type="text" id="bName" value="${ex.examName}" placeholder="उदा. भौतिक विज्ञान टेस्ट" class="w-full p-2.5 border rounded-xl mt-1 font-bold outline-none" />
+              </div>
+              <div>
+                <label class="font-bold text-slate-700">परीक्षा कोड (Unique Code) *</label>
+                <input type="text" id="bCode" value="${ex.examCode}" class="w-full p-2.5 border rounded-xl mt-1 text-indigo-700 font-mono font-black uppercase outline-none" />
+              </div>
+              <div>
+                <label class="font-bold text-slate-700">वर्ग (Class) *</label>
+                <select id="bClass" onchange="document.getElementById('bMergeBox').classList.toggle('hidden', this.value !== 'Class 12')" class="w-full p-2.5 border rounded-xl mt-1 text-indigo-700 font-bold outline-none bg-white">
+                  <option value="Class 10" ${ex.class === 'Class 10' ? 'selected' : ''}>Class 10</option>
+                  <option value="Class 12" ${ex.class === 'Class 12' ? 'selected' : ''}>Class 12</option>
+                  <option value="Class 11" ${ex.class === 'Class 11' ? 'selected' : ''}>Class 11</option>
+                  <option value="Class 9" ${ex.class === 'Class 9' ? 'selected' : ''}>Class 9</option>
+                  <option value="Class 8" ${ex.class === 'Class 8' ? 'selected' : ''}>Class 8</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="bMergeBox" class="${ex.class === 'Class 12' ? '' : 'hidden'} p-3 bg-indigo-50 rounded-2xl border border-indigo-100 flex items-center gap-2">
+              <input type="checkbox" id="bMerge" ${ex.mergeClass12 ? 'checked' : ''} class="accent-indigo-600 w-4 h-4 cursor-pointer" />
+              <label for="bMerge" class="text-indigo-900 font-bold cursor-pointer">
+                🔗 कक्षा 12: Arts और Science दोनों विद्यार्थियों को यह परीक्षा दिखाएँ (हिंदी/अंग्रेज़ी के लिए)
+              </label>
+            </div>
+
+            <div class="grid md:grid-cols-4 gap-3">
+              <div>
+                <label class="font-bold text-slate-700">विषय (Subject) *</label>
+                <input type="text" id="bSubject" value="${ex.subject || ''}" placeholder="उदा. Physics" class="w-full p-2.5 border rounded-xl mt-1 outline-none" />
+              </div>
+              <div>
+                <label class="font-bold text-slate-700">अध्याय (Chapter)</label>
+                <input type="text" id="bChapter" value="${ex.chapter || ''}" placeholder="उदा. प्रकाश" class="w-full p-2.5 border rounded-xl mt-1 outline-none" />
+              </div>
+              <div>
+                <label class="font-bold text-slate-700">समय प्रकार</label>
+                <select id="bTiming" onchange="document.getElementById('bDurBox').classList.toggle('hidden', this.value !== 'limited')" class="w-full p-2.5 border rounded-xl mt-1 outline-none bg-white">
+                  <option value="unlimited" ${ex.timingType === 'unlimited' ? 'selected' : ''}>स्टॉपवॉच (Unlimited)</option>
+                  <option value="limited" ${ex.timingType === 'limited' ? 'selected' : ''}>समय सीमा (Countdown)</option>
+                </select>
+              </div>
+              <div id="bDurBox" class="${ex.timingType === 'limited' ? '' : 'hidden'}">
+                <label class="font-bold text-slate-700">अवधि (मिनट)</label>
+                <input type="number" id="bDuration" value="${ex.durationMinutes || 30}" class="w-full p-2.5 border rounded-xl mt-1 outline-none" />
+              </div>
+            </div>
+          </div>
+
+          <div class="bg-indigo-50 border-2 border-dashed border-indigo-200 p-5 rounded-3xl space-y-3">
+            <div>
+              <h3 class="font-black text-indigo-900 text-sm">⚡ 100+ बल्क प्रश्न यहाँ पेस्ट करें (गणित, भौतिकी, रसायन सूत्र समर्थित)</h3>
+              <p class="text-xs text-indigo-700">फॉर्मेट: 1. प्रश्न (A) विकल्प (B) विकल्प (C) विकल्प (D) विकल्प उत्तर: A</p>
+            </div>
+            <textarea id="bulkPasteArea" rows="5" placeholder="1. प्रश्न यहाँ लिखें...&#10;(A) विकल्प A&#10;(B) विकल्प B&#10;(C) विकल्प C&#10;(D) विकल्प D&#10;उत्तर: A" class="w-full p-3 border rounded-2xl text-xs font-mono outline-none"></textarea>
+            <button onclick="processBulkTextAction()" class="bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow">
+              ⚡ सभी प्रश्न लोड करें
+            </button>
+          </div>
+
+          <div class="space-y-4">
+            ${ex.questions.map((q, i) => `
+              <div class="bg-white border p-5 rounded-3xl space-y-3 shadow-sm relative">
+                <div class="flex justify-between items-center border-b pb-2">
+                  <span class="bg-indigo-100 text-indigo-700 font-mono font-bold text-xs px-2.5 py-0.5 rounded-xl">Q${i+1}</span>
+                  <button onclick="removeQuestionCard(${i})" class="text-rose-500 text-xs font-bold hover:bg-rose-50 px-2.5 py-1 rounded-xl">🗑️ Delete</button>
+                </div>
+
+                <textarea id="b_qText_${i}" placeholder="प्रश्न लिखें..." class="w-full p-3 border rounded-2xl text-xs outline-none">${q.questionText}</textarea>
+
+                <div class="flex items-center gap-2 text-xs">
+                  <label class="cursor-pointer bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-xl font-bold">
+                    📷 फ़ोटो / डायग्राम जोड़ें
+                    <input type="file" accept="image/*" class="hidden" onchange="uploadQuestionDiagram(${i}, event)" />
+                  </label>
+                  ${q.imageUrl ? `<button onclick="state.builderExam.questions[${i}].imageUrl=''; renderCreateExam(document.getElementById('app'));" class="bg-rose-50 text-rose-600 px-3 py-1.5 rounded-xl font-bold">चित्र हटाएँ</button>` : ''}
+                </div>
+                ${q.imageUrl ? `<div class="py-1"><img src="${q.imageUrl}" class="max-h-48 max-w-full rounded-2xl border p-1 bg-white object-contain" /></div>` : ''}
+
+                <div class="grid md:grid-cols-2 gap-2 text-xs">
+                  ${[0, 1, 2, 3].map(oi => `
+                    <div class="flex items-center gap-2 border p-2 rounded-xl">
+                      <span class="font-mono font-bold text-slate-500">${['A','B','C','D'][oi]}.</span>
+                      <input type="text" id="b_opt_${i}_${oi}" value="${q.options[oi]}" placeholder="Option ${['A','B','C','D'][oi]}" class="w-full outline-none text-xs" />
+                    </div>
+                  `).join("")}
+                </div>
+
+                <div class="flex justify-between items-center text-xs pt-2 border-t">
+                  <div class="flex items-center gap-2">
+                    <span class="font-bold text-slate-600">सही उत्तर:</span>
+                    <select id="b_ans_${i}" class="border text-indigo-700 font-bold p-1.5 rounded-xl outline-none bg-white">
+                      ${[0, 1, 2, 3].map(oi => `<option value="${oi}" ${q.correctAnswer === oi ? 'selected' : ''}>Option ${['A','B','C','D'][oi]}</option>`).join("")}
+                    </select>
+                  </div>
+                  <button onclick="addNewBlankQuestionAction(${i+1})" class="bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-xl font-bold border border-indigo-200">
+                    ➕ अगला प्रश्न जोड़ें
+                  </button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+    async function uploadQuestionDiagram(index, event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 800;
+          let w = img.width, h = img.height;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+            else { w = Math.round((w * maxDim) / h); h = maxDim; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+          state.builderExam.questions[index].imageUrl = canvas.toDataURL("image/jpeg", 0.7);
+          renderCreateExam(document.getElementById("app"));
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function addNewBlankQuestionAction(insertAt = null) {
+      syncBuilderFields();
+      const newQ = { questionText: "", options: ["", "", "", ""], correctAnswer: 0, imageUrl: "" };
+      if (insertAt !== null) state.builderExam.questions.splice(insertAt, 0, newQ);
+      else state.builderExam.questions.push(newQ);
+      renderCreateExam(document.getElementById("app"));
+    }
+
+    function removeQuestionCard(idx) {
+      if (state.builderExam.questions.length <= 1) return alert("कम से कम 1 प्रश्न होना आवश्यक है!");
+      syncBuilderFields();
+      state.builderExam.questions.splice(idx, 1);
+      renderCreateExam(document.getElementById("app"));
+    }
+
+    function processBulkTextAction() {
+      const raw = document.getElementById("bulkPasteArea").value.trim();
+      if (!raw) return alert("कृपया प्रश्न पेस्ट करें!");
+      syncBuilderFields();
+
+      const qPattern = /(?:^|\n)\s*(?:(\d+)[\.\)]|Q\s*(\d+)[\.\:\-]?)\s+/gi;
+      const matches = [...raw.matchAll(qPattern)];
+      let loaded = [];
+
+      if (matches.length > 0) {
+        for (let i = 0; i < matches.length; i++) {
+          const start = matches[i].index;
+          const end = (i + 1 < matches.length) ? matches[i + 1].index : raw.length;
+          const lines = raw.substring(start, end).trim().split("\n").map(l => l.trim()).filter(Boolean);
+          if (lines.length >= 5) {
+            let qText = lines[0].replace(/^(\d+[\.\)]|Q\s*\d+[\.\:\-]?)\s*/i, "").trim();
+            let opts = ["", "", "", ""];
+            let ans = 0;
+            for (let j = 1; j < lines.length; j++) {
+              const l = lines[j];
+              if (/^[\(\[]?[A1क][\)\.\:\-]/i.test(l)) opts[0] = l.replace(/^[\(\[]?[A1क][\)\.\:\-]\s*/i, "").trim();
+              else if (/^[\(\[]?[B2ख][\)\.\:\-]/i.test(l)) opts[1] = l.replace(/^[\(\[]?[B2ख][\)\.\:\-]\s*/i, "").trim();
+              else if (/^[\(\[]?[C3ग][\)\.\:\-]/i.test(l)) opts[2] = l.replace(/^[\(\[]?[C3ग][\)\.\:\-]\s*/i, "").trim();
+              else if (/^[\(\[]?[D4घ][\)\.\:\-]/i.test(l)) opts[3] = l.replace(/^[\(\[]?[D4घ][\)\.\:\-]\s*/i, "").trim();
+              else if (/^(Ans|उत्तर|Answer)[\s\:\-\.\=\(\[]+/i.test(l)) {
+                const u = l.toUpperCase();
+                if (/[B२ख2]/.test(u)) ans = 1;
+                else if (/[C३ग3]/.test(u)) ans = 2;
+                else if (/[D४घ4]/.test(u)) ans = 3;
+              }
+            }
+            if (qText && opts[0]) loaded.push({ questionText: qText, options: opts, correctAnswer: ans, imageUrl: "" });
+          }
+        }
+      }
+
+      if (loaded.length === 0) return alert("फॉर्मेट समझ नहीं आया! 1. प्रश्न और (A),(B),(C),(D) विकल्प लिखें।");
+      if (state.builderExam.questions.length === 1 && !state.builderExam.questions[0].questionText.trim()) {
+        state.builderExam.questions = loaded;
+      } else {
+        state.builderExam.questions = state.builderExam.questions.concat(loaded);
+      }
+      alert(`कुल ${loaded.length} प्रश्न लोड हो गए!`);
+      renderCreateExam(document.getElementById("app"));
+    }
+
+    async function saveExamAction() {
+      if (examSaveInProgress) return;
+      examSaveInProgress = true;
+      const btn = document.getElementById("topSaveExamBtn");
+      if (btn) { btn.disabled = true; btn.textContent = "⏳ सुरक्षित हो रहा है..."; }
+
+      syncBuilderFields();
+      const ex = state.builderExam;
+      if (!ex.examName.trim() || !ex.examCode.trim()) {
+        examSaveInProgress = false;
+        if (btn) { btn.disabled = false; btn.textContent = "💾 सुरक्षित करें (Publish)"; }
+        return alert("कृपया परीक्षा का नाम और कोड भरें!");
+      }
+
+      try {
+        const id = await API.saveExam(ex);
+        ex.id = id;
+        alert("✅ परीक्षा सफलतापूर्वक प्रकाशित हो गई!");
+        navigate("teacher-dash");
+      } catch (e) {
+        alert("त्रुटि: " + e.message);
+      } finally {
+        examSaveInProgress = false;
+      }
+    }
+    async function renderTeacherTrash(c) {
+      const all = await API.getExams();
+      const trash = all.filter(e => e.isDeleted);
+
+      c.innerHTML = `
+        <div class="max-w-2xl mx-auto space-y-4">
+          <div class="flex justify-between items-center bg-white p-4 rounded-3xl border shadow-sm">
+            <div>
+              <h2 class="font-bold text-rose-600 text-base">🗑️ रीसायकल बिन</h2>
+              <p class="text-xs text-slate-500">डिलीट की गई परीक्षाएँ यहाँ 15 दिनों तक सुरक्षित रहती हैं</p>
+            </div>
+            <button onclick="navigate('teacher-dash')" class="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-xl font-bold">← Dashboard</button>
+          </div>
+
+          <div class="bg-white rounded-3xl border p-4 space-y-3">
+            ${trash.length === 0 ? '<p class="text-center text-xs text-slate-400 py-8">रीसायकल बिन खाली है।</p>' : trash.map(item => `
+              <div class="flex justify-between items-center p-3 border rounded-2xl bg-rose-50/40 text-xs">
+                <div>
+                  <h4 class="font-bold text-slate-800">${item.examName}</h4>
+                  <span class="text-slate-500 font-mono">Code: ${item.examCode} • वर्ग: ${item.class}</span>
+                </div>
+                <div class="flex gap-2">
+                  <button onclick="restoreExamNow('${item.id}', '${item.examName}')" class="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold">⟲ Restore</button>
+                  <button onclick="permanentDeleteExamNow('${item.id}', '${item.examName}')" class="bg-rose-600 text-white px-3 py-1.5 rounded-xl font-bold">हमेशा के लिए हटाएँ</button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    async function restoreExamNow(id, name) {
+      await API.setExamTrashState(id, false);
+      alert(`"${name}" सफलतापूर्वक रीस्टोर हो गई!`);
+      renderTeacherTrash(document.getElementById("app"));
+    }
+
+    function permanentDeleteExamNow(id, name) {
+      openModal("हमेशा के लिए हटाएँ?", `सावधानी: "${name}" को हमेशा के लिए मिटा दिया जाएगा!`, async () => {
+        await API.permanentDeleteExam(id);
+        alert("परीक्षा पूरी तरह मिटा दी गई!");
+        renderTeacherTrash(document.getElementById("app"));
+      });
+    }
+
+    async function renderMeritList(c) {
+      const code = (state.meritFilterCode || "").trim().toUpperCase();
+      c.innerHTML = `
+        <div class="max-w-3xl mx-auto space-y-4">
+          <div class="flex flex-wrap justify-between items-center bg-white p-4 rounded-3xl border shadow-sm gap-2">
+            <h2 class="font-bold text-amber-600 text-base">🏆 Merit List (${code || "परीक्षा चुनें"})</h2>
+            <div class="flex gap-2">
+              <button onclick="downloadElementAsImage('meritTableBox', 'Merit_List_${code}')" class="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-xl">🖼️ फोटो डाउनलोड</button>
+              <button onclick="navigate('teacher-dash')" class="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-xl font-bold">← Dashboard</button>
+            </div>
+          </div>
+
+          <div class="bg-white p-3 rounded-2xl border flex gap-2">
+            <input type="text" id="mCodeIn" value="${code}" placeholder="परीक्षा कोड (Exam Code) लिखें..." class="w-full p-2 border rounded-xl text-xs uppercase font-bold outline-none" />
+            <button onclick="state.meritFilterCode = document.getElementById('mCodeIn').value; renderMeritList(document.getElementById('app'));" class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold">खोजें</button>
+          </div>
+
+          <div id="meritTableBox" class="bg-white p-4 rounded-3xl border shadow-sm space-y-2 text-xs">डेटा लोड हो रहा है...</div>
+        </div>
+      `;
+
+      if (!code) {
+        document.getElementById("meritTableBox").innerHTML = '<p class="text-center text-slate-400 py-6">ऊपर परीक्षा कोड डालकर खोजें।</p>';
+        return;
+      }
+
+      const all = await API.getResults();
+      const list = all.filter(r => r.examCode === code);
+      list.sort((a, b) => b.scoredMarks - a.scoredMarks || (a.timeSpentSeconds || 0) - (b.timeSpentSeconds || 0));
+
+      document.getElementById("meritTableBox").innerHTML = list.length === 0 ? '<p class="text-center text-rose-500 py-6">इस कोड से कोई परिणाम नहीं मिला।</p>' : list.map((r, i) => `
+        <div class="p-3 rounded-2xl border flex justify-between items-center bg-slate-50 mb-2">
+          <div>
+            <strong class="text-slate-800">#${i + 1} ${r.studentName}</strong>
+            <div class="text-[11px] text-slate-500">${r.studentClass} • समय: ${r.timeSpentText || 'N/A'} • तारीख: ${r.date}</div>
+          </div>
+          <div class="text-right">
+            <span class="font-bold text-indigo-700 block">${r.scoredMarks} / ${r.totalMarks} (${r.percentage}%)</span>
+            <button onclick="confirmDeleteSingleResult('${r.id}')" class="text-rose-500 text-[10px] font-bold hover:underline">हटाएँ</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function confirmDeleteSingleResult(resId) {
+      openModal("परिणाम हटाएँ?", "क्या आप इस छात्र का परिणाम हटाना चाहते हैं?", async () => {
+        await API.deleteResult(resId);
+        alert("परिणाम हटा दिया गया!");
+        renderMeritList(document.getElementById("app"));
+      });
+    }
+    function renderTeacherBroadcast(c) {
+      c.innerHTML = `
+        <div class="max-w-md mx-auto bg-white p-6 rounded-3xl border shadow-sm space-y-4 text-xs">
+          <div class="flex justify-between items-center border-b pb-2">
+            <h3 class="font-black text-sm text-rose-600">📢 विद्यार्थियों को सूचना भेजें</h3>
+            <button onclick="navigate('teacher-dash')" class="bg-slate-100 px-3 py-1.5 rounded-xl font-bold">← Dashboard</button>
+          </div>
+          <div>
+            <label class="font-bold">संदेश / नोटिस *</label>
+            <textarea id="bcText" rows="4" placeholder="उदा. कल 10 बजे कक्षा 10 की विज्ञान की लाइव परीक्षा होगी..." class="w-full p-2.5 border rounded-xl mt-1 outline-none"></textarea>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="font-bold">टारगेट वर्ग</label>
+              <select id="bcClass" class="w-full p-2 border rounded-xl mt-1 bg-white">
+                <option value="सभी वर्ग">सभी वर्ग (All)</option>
+                <option value="Class 10">Class 10</option>
+                <option value="Class 12">Class 12</option>
+              </select>
+            </div>
+            <div>
+              <label class="font-bold">कितनी देर तक दिखे</label>
+              <select id="bcHours" class="w-full p-2 border rounded-xl mt-1 bg-white">
+                <option value="2">2 घंटे</option>
+                <option value="6">6 घंटे</option>
+                <option value="24">24 घंटे (1 दिन)</option>
+              </select>
+            </div>
+          </div>
+          <button onclick="publishNoticeAction()" class="w-full bg-rose-600 text-white font-bold py-3 rounded-xl shadow">
+            📢 नोटिस प्रसारित करें (Broadcast)
+          </button>
+        </div>
+      `;
+    }
+
+    function publishNoticeAction() {
+      const text = document.getElementById("bcText").value.trim();
+      const targetClass = document.getElementById("bcClass").value;
+      const hours = Number(document.getElementById("bcHours").value) || 2;
+      if (!text) return alert("कृपया नोटिस लिखें!");
+
+      const notice = {
+        text, targetClass,
+        expiresAt: Date.now() + (hours * 60 * 60 * 1000)
+      };
+      state.notice = notice;
+      localStorage.setItem("sep_broadcast_notice", JSON.stringify(notice));
+      alert("✅ नोटिस प्रसारित हो गया!");
+      navigate("teacher-dash");
+    }
+
+    async function renderTeacherStudents(c) {
+      const all = await API.getStudents();
+      c.innerHTML = `
+        <div class="max-w-2xl mx-auto space-y-4 text-xs">
+          <div class="flex justify-between items-center bg-white p-4 rounded-3xl border shadow-sm">
+            <h2 class="font-bold text-slate-800 text-base">👥 विद्यार्थी क्रेडेंशियल सूची (${all.length})</h2>
+            <button onclick="navigate('teacher-dash')" class="bg-slate-800 text-white px-3 py-1.5 rounded-xl font-bold">← Dashboard</button>
+          </div>
+          <div class="bg-white rounded-3xl border p-4 space-y-2">
+            ${all.length === 0 ? '<p class="text-center text-slate-400 py-6">कोई विद्यार्थी पंजीकृत नहीं है।</p>' : all.map(s => `
+              <div class="p-3 border rounded-2xl bg-slate-50 flex justify-between items-center">
+                <div>
+                  <strong class="text-slate-800 text-sm">${s.name}</strong> (${s.class})
+                </div>
+                <div class="text-right font-mono">
+                  यूज़रनेम: <b class="text-indigo-600">${s.username}</b> | पासवर्ड: <b class="text-emerald-700">${s.password}</b>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    async function renderStudentChat(c) {
+      const student = state.activeStudent;
+      const all = await API.getMessages();
+      const myMsgs = all.filter(m => m.studentUsername === student.username || m.studentName === student.name);
+
+      c.innerHTML = `
+        <div class="max-w-md mx-auto bg-white p-6 rounded-3xl border shadow-sm space-y-4 text-xs">
+          <div class="flex justify-between items-center border-b pb-2">
+            <h2 class="font-bold text-indigo-700 text-sm">💬 शिक्षक से सवाल पूछें</h2>
+            <button onclick="navigate('student-dashboard')" class="bg-slate-100 px-3 py-1 rounded-xl">← वापस</button>
+          </div>
+          <textarea id="chatInput" rows="3" placeholder="अपना सवाल विस्तार से लिखें..." class="w-full p-2.5 border rounded-xl outline-none"></textarea>
+          <button onclick="submitStudentMsg()" class="w-full bg-indigo-600 text-white font-bold py-2.5 rounded-xl shadow">भेजें</button>
+          <div class="space-y-2 pt-2">
+            ${myMsgs.map(m => `
+              <div class="p-3 bg-slate-50 border rounded-2xl space-y-1">
+                <div><strong>सवाल:</strong> ${m.message || m.text}</div>
+                <div class="p-2 bg-indigo-50 border rounded-xl text-indigo-900">
+                  <strong>सर का जवाब:</strong> ${m.reply || '<span class="text-amber-600">⏳ प्रतीक्षारत...</span>'}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    async function submitStudentMsg() {
+      const text = document.getElementById("chatInput").value.trim();
+      if (!text) return alert("कृपया सवाल लिखें!");
+      const stu = state.activeStudent;
+      await API.sendMessage({
+        studentUsername: stu.username,
+        studentName: stu.name,
+        studentClass: stu.class,
+        message: text,
+        reply: ""
+      });
+      alert("सवाल भेज दिया गया!");
+      renderStudentChat(document.getElementById("app"));
+    }
+
+    async function renderTeacherChat(c) {
+      const msgs = await API.getMessages();
+      msgs.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));
+
+      c.innerHTML = `
+        <div class="max-w-2xl mx-auto space-y-4 text-xs">
+          <div class="flex justify-between items-center bg-white p-4 rounded-3xl border shadow-sm">
+            <h2 class="font-bold text-slate-800 text-base">📬 विद्यार्थियों के सवाल (${msgs.length})</h2>
+            <button onclick="navigate('teacher-dash')" class="bg-slate-800 text-white px-3 py-1.5 rounded-xl font-bold">← Dashboard</button>
+          </div>
+          <div class="space-y-3">
+            ${msgs.length === 0 ? '<p class="text-center text-slate-400 py-8 bg-white rounded-3xl border">कोई सवाल नहीं है।</p>' : msgs.map(m => `
+              <div class="bg-white border p-4 rounded-2xl space-y-2 shadow-sm">
+                <div class="flex justify-between font-bold text-slate-800">
+                  <span>${m.studentName} (${m.studentClass})</span>
+                  <span class="text-[10px] text-slate-400 font-mono">${m.date || ''}</span>
+                </div>
+                <p class="bg-slate-50 p-2.5 rounded-xl border">${m.message || m.text}</p>
+                <div>
+                  ${m.reply ? `
+                    <div class="p-2 bg-emerald-50 text-emerald-800 rounded-xl border">
+                      <strong>✅ आपका जवाब:</strong> ${m.reply}
+                    </div>
+                  ` : `
+                    <button onclick="openReplyModalAction('${m.id}')" class="bg-indigo-600 text-white px-3 py-1.5 rounded-xl font-bold">
+                      ✍️ जवाब लिखें (Reply)
+                    </button>
+                  `}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function openReplyModalAction(id) {
+      const r = prompt("विद्यार्थी को उत्तर लिखें:");
+      if (r && r.trim()) {
+        API.replyMessage(id, r.trim()).then(() => {
+          alert("उत्तर भेज दिया गया!");
+          renderTeacherChat(document.getElementById("app"));
+        });
+      }
+    }
+    /* ==================== 9. SAFE APP ROUTING & AUTO BOOT ==================== */
+    function renderApp() {
+      try {
+        const rawTeacher = localStorage.getItem("sep_teacher");
+        state.activeTeacher = (rawTeacher && rawTeacher !== "null") ? JSON.parse(rawTeacher) : null;
+        const rawStudent = localStorage.getItem("sep_student");
+        state.activeStudent = (rawStudent && rawStudent !== "null") ? JSON.parse(rawStudent) : null;
+      } catch (e) {}
+
+      const app = document.getElementById("app");
+      const navArea = document.getElementById("navAuthArea");
+      if (!app) return;
+
+      if (navArea) {
+        if (state.activeTeacher) {
+          navArea.innerHTML = `
+            <button onclick="navigate('teacher-dash')" class="text-xs bg-indigo-900 text-white px-3 py-1.5 rounded-xl font-bold">डैशबोर्ड</button>
+            <button onclick="navigate('student-dashboard')" class="text-xs bg-amber-500 text-white px-3 py-1.5 rounded-xl font-bold">छात्र पोर्टल</button>
+            <button onclick="handleTeacherLogout()" class="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-xl font-bold">Logout</button>
+          `;
+        } else if (state.activeStudent) {
+          navArea.innerHTML = `
+            <button onclick="navigate('student-dashboard')" class="text-xs bg-indigo-900 text-white px-3 py-1.5 rounded-xl font-bold">Arena</button>
+            <button onclick="handleStudentLogout()" class="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-xl font-bold">Logout</button>
+          `;
+        } else {
+          navArea.innerHTML = `
+            <button onclick="navigate('student-login')" class="text-xs bg-amber-500 text-white px-3 py-1.5 rounded-xl font-bold shadow">Student Login</button>
+            <button onclick="navigate('teacher-login')" class="text-xs bg-white text-indigo-700 px-3 py-1.5 rounded-xl font-bold shadow">Teacher Login</button>
+          `;
+        }
+      }
+
+      switch (state.view) {
+        case "student-home":
+        case "student-login": renderStudentLogin(app); break;
+        case "student-dashboard": renderStudentDashboard(app); break;
+        case "live-exam": renderLiveExam(app); break;
+        case "student-result": renderStudentResult(app); break;
+        case "student-records": renderStudentRecords(app); break;
+        case "student-chat": renderStudentChat(app); break;
+        case "teacher-login": renderTeacherLogin(app); break;
+        case "teacher-dash":
+        case "teacher-dashboard": renderTeacherDashboard(app); break;
+        case "create-exam": renderCreateExam(app); break;
+        case "merit-list": renderMeritList(app); break;
+        case "teacher-trash": renderTeacherTrash(app); break;
+        case "teacher-broadcast": renderTeacherBroadcast(app); break;
+        case "teacher-students": renderTeacherStudents(app); break;
+        case "teacher-chat": renderTeacherChat(app); break;
+        default: renderStudentLogin(app); break;
+      }
+    }
+
+    function bootPortal() {
+      try {
+        const rawTeacher = localStorage.getItem("sep_teacher");
+        if (rawTeacher && rawTeacher !== "null") {
+          state.activeTeacher = JSON.parse(rawTeacher);
+          state.view = "teacher-dash";
+        } else {
+          const rawStudent = localStorage.getItem("sep_student");
+          if (rawStudent && rawStudent !== "null") {
+            state.activeStudent = JSON.parse(rawStudent);
+            state.view = "student-dashboard";
+          } else {
+            state.view = "student-login";
+          }
+        }
+      } catch (e) {
+        state.view = "student-login";
+      }
+      renderApp();
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", bootPortal);
+    } else {
+      bootPortal();
+    }
+  </script>
+</body>
+</html>
